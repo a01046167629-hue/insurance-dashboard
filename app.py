@@ -61,7 +61,7 @@ def fetch_real_naver_news():
                         mentioned_company = comp
                         break
                 
-                # 💡 실무형 기획에 맞춰 세부 키워드 풀을 고도화 및 매칭
+                # 실무형 기획에 맞춘 14대 핵심 트렌드 키워드 매칭
                 keywords_pool = ["상생금융", "실적개선", "디지털전환", "보험료 인상", "보험료 인하", "신상품", "고령화", "비급여 과잉", "수가", "제3보험", "4세대 실손", "청구 간소화", "자율주행", "반려동물"]
                 extracted_kw = "시장 동향 일반"
                 for kw in keywords_pool:
@@ -100,56 +100,58 @@ st.caption(f"🔄 매주 월요일 정기 자동 업데이트 시스템 연동 �
 selected_category = st.sidebar.multiselect("🔍 보험 상품 필터", options=list(df["카테고리(상품)"].unique()), default=list(df["카테고리(상품)"].unique()))
 filtered_df = df[df["카테고리(상품)"].isin(selected_category)]
 
-# 주요 지표 (Metric) - 실무에 중요한 지표로 정비
+# 주요 지표 (Metric)
 col1, col2, col3 = st.columns(3)
 with col1: 
     st.metric("📋 이번 주 수집 뉴스", f"{len(filtered_df)} 건")
 with col2: 
-    # 일반 동향을 제외한 가장 많이 나온 핵심 이슈 추출
+    # 일반 동향을 제외한 가장 많이 나온 실제 핵심 이슈 추출
     real_kws = filtered_df[filtered_df["핵심키워드"] != "시장 동향 일반"]
     top_keyword = real_kws["핵심키워드"].value_counts().index[0] if not real_kws.empty else "시장 동향 일반"
     st.metric("🎯 최다 발생 비즈니스 이슈", top_keyword)
 with col3:
-    # 가장 활발히 뉴스가 발생하는 집중 상품군 추출
     top_cat = filtered_df["카테고리(상품)"].value_counts().index[0] if not filtered_df.empty else "-"
     st.metric("🔥 트렌드 집중 상품군", top_cat)
 
 st.markdown("---")
 
 # ==========================================
-# 📊 [개편] 상품군별 핵심 트렌드 이슈 교차 분석 시각화보드
+# 📊 [1안 반영] '시장 동향 일반'을 숨긴 트렌드 매트릭스 보드
 # ==========================================
 st.subheader("🧩 보험 상품군별 핵심 트렌드 이슈 분석 매트릭스")
-st.write("어떤 보험 상품(가로축)에서 어떤 핵심 키워드 이슈(세로축)가 가장 빈번하게 일어나고 있는지 밀도를 분석합니다. 색이 짙을수록 현재 업계에서 집중적으로 다뤄지는 메가 트렌드입니다.")
+st.write("💡 정보 가치를 높이기 위해 단순 시황 및 보도성 뉴스인 **'시장 동향 일반' 데이터는 차트에서 제외**하고, 상품기획에 직결되는 핵심 비즈니스 이슈 밀도만 분석합니다.")
 
 if not filtered_df.empty:
-    # 히트맵 구조 생성을 위한 데이터 가공 (카테고리와 키워드별 빈도수 계산)
-    pivot_df = filtered_df.groupby(["핵심키워드", "카테고리(상품)"]).size().reset_index(name="기사수")
+    # 🎯 핵심 로직: 시각화 차트에서만 '시장 동향 일반' 데이터를 필터링하여 제거
+    chart_df = filtered_df[filtered_df["핵심키워드"] != "시장 동향 일반"]
     
-    # Plotly Density Heatmap(밀도 히트맵)을 이용한 트렌드 매트릭스 시각화
-    fig_heatmap = px.density_heatmap(
-        pivot_df, 
-        x="카테고리(상품)", 
-        y="핵심키워드", 
-        z="기사수",
-        text_auto=True,
-        color_continuous_scale="Purples", # 세련된 보라색 테마
-        labels={"카테고리(상품)": "보험 상품군", "핵심키워드": "이슈 키워드", "기사수": "발생 건수"}
-    )
-    
-    fig_heatmap.update_layout(
-        xaxis_title="보험 상품군",
-        yaxis_title="시장 핵심 키워드",
-        coloraxis_colorbar=dict(title="이슈 빈도")
-    )
-    
-    st.plotly_chart(fig_heatmap, use_container_width=True)
+    if not chart_df.empty:
+        pivot_df = chart_df.groupby(["핵심키워드", "카테고리(상품)"]).size().reset_index(name="기사수")
+        
+        fig_heatmap = px.density_heatmap(
+            pivot_df, 
+            x="카테고리(상품)", 
+            y="핵심키워드", 
+            z="기사수",
+            text_auto=True,
+            color_continuous_scale="Purples",
+            labels={"카테고리(상품)": "보험 상품군", "핵심키워드": "이슈 키워드", "기사수": "발생 건수"}
+        )
+        
+        fig_heatmap.update_layout(
+            xaxis_title="보험 상품군",
+            yaxis_title="시장 핵심 키워드",
+            coloraxis_colorbar=dict(title="이슈 빈도")
+        )
+        st.plotly_chart(fig_heatmap, use_container_width=True)
+    else:
+        st.info("💡 현재 필터링된 범위 내에 '시장 동향 일반' 외의 특이 이슈 키워드가 발견되지 않았습니다. 하단 뉴스 원문을 참고해 주세요.")
 else:
     st.write("분석할 트렌드 데이터가 없습니다.")
 
 st.markdown("---")
 
-# 데이터 테이블
+# 데이터 테이블 (여기서는 '시장 동향 일반'을 포함한 전체 뉴스를 읽을 수 있습니다)
 st.subheader("📰 실시간 수집 뉴스 데이터 매트릭스")
 st.data_editor(
     filtered_df[["날짜", "카테고리(상품)", "언급보험사", "핵심키워드", "제목", "기사링크"]],

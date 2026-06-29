@@ -18,7 +18,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# 💡 매주 월요일마다 데이터를 새로 고치는 핵심 로직 (7일간 캐시 유지)
+# 💡 매주 월요일마다 데이터를 새로 고치는 핵심 로직 (7일간 캐시 유지 및 핵심 뉴스 100개 타겟팅)
 @st.cache_data(ttl=timedelta(days=7))
 def fetch_real_naver_news():
     categories = ["손해보험", "생명보험", "실손보험", "자동차보험", "펫보험"]
@@ -33,9 +33,10 @@ def fetch_real_naver_news():
         "X-Naver-Client-Secret": NAVER_CLIENT_SECRET.strip()
     }
 
+    # 정밀 필터링 후 정확히 100개를 채우기 위해 각 카테고리별 검색 한도를 넉넉히 설정
     for cat in categories:
         encoded_query = urllib.parse.quote(f"{cat} 보험 트렌드")
-        url = f"https://openapi.naver.com/v1/search/news.json?query={encoded_query}&display=40&sort=sim"
+        url = f"https://openapi.naver.com/v1/search/news.json?query={encoded_query}&display=50&sort=sim"
         
         try:
             response = requests.get(url, headers=headers)
@@ -69,19 +70,25 @@ def fetch_real_naver_news():
                         extracted_kw = kw
                         break
 
-                all_news.append({
-                    "날짜": formatted_date,
-                    "카테고리(상품)": cat,
-                    "언급보험사": mentioned_company,
-                    "핵심키워드": extracted_kw,
-                    "제목": clean_title,
-                    "기사내용": clean_desc,
-                    "기사링크": item["link"]
-                })
+                # 🎯 [필터 로직] '시장 동향 일반' 뉴스는 원천적으로 제외하고 저장
+                if extracted_kw != "시장 동향 일반":
+                    all_news.append({
+                        "날짜": formatted_date,
+                        "카테고리(상품)": cat,
+                        "언급보험사": mentioned_company,
+                        "핵심키워드": extracted_kw,
+                        "제목": clean_title,
+                        "기사내용": clean_desc,
+                        "기사링크": item["link"]
+                    })
         except Exception as e:
             return load_demo_data()
             
-    return pd.DataFrame(all_news)
+    # 전체 수집된 핵심 기사 중 최신/유의미한 순으로 딱 100개만 슬라이싱하여 최종 리포트 구성
+    final_df = pd.DataFrame(all_news)
+    if not final_df.empty:
+        final_df = final_df.head(100)
+    return final_df
 
 def load_demo_data():
     return pd.DataFrame([{
@@ -97,17 +104,15 @@ st.title("📊 AI 기반 보험 트렌드 분석 및 상품 개선 제안 플랫
 st.caption(f"🔄 매주 월요일 정기 자동 업데이트 시스템 연동 완료 (최근 갱신일: {datetime.now().strftime('%Y-%m-%d')})")
 
 # 사이드바 필터
-selected_category = st.sidebar.multiselect("🔍 보험 상품 필터", options=list(df["카테고리(상품)"].unique()), default=list(df["카테고리(상품)"].unique()))
-filtered_df = df[df["카테고리(상품)"].isin(selected_category)]
+selected_category = st.sidebar.multiselect("🔍 보험 상품 필터", options=list(df["카테고리(상품)"].unique()) if not df.empty else ["펫보험"], default=list(df["카테고리(상품)"].unique()) if not df.empty else ["펫보험"])
+filtered_df = df[df["카테고리(상품)"].isin(selected_category)] if not df.empty else df
 
 # 주요 지표 (Metric)
 col1, col2, col3 = st.columns(3)
 with col1: 
-    st.metric("📋 이번 주 수집 뉴스", f"{len(filtered_df)} 건")
+    st.metric("📋 주간 정밀 수집 뉴스", f"{len(filtered_df)} 건 / 100 건")
 with col2: 
-    # 일반 동향을 제외한 가장 많이 나온 실제 핵심 이슈 추출
-    real_kws = filtered_df[filtered_df["핵심키워드"] != "시장 동향 일반"]
-    top_keyword = real_kws["핵심키워드"].value_counts().index[0] if not real_kws.empty else "시장 동향 일반"
+    top_keyword = filtered_df["핵심키워드"].value_counts().index[0] if not filtered_df.empty else "-"
     st.metric("🎯 최다 발생 비즈니스 이슈", top_keyword)
 with col3:
     top_cat = filtered_df["카테고리(상품)"].value_counts().index[0] if not filtered_df.empty else "-"
@@ -116,57 +121,43 @@ with col3:
 st.markdown("---")
 
 # ==========================================
-# 📊 [1안 반영] '시장 동향 일반'을 숨긴 트렌드 매트릭스 보드
+# 1. [중간] 트렌드 이슈 분석 매트릭스 (시각화 보드)
 # ==========================================
 st.subheader("🧩 보험 상품군별 핵심 트렌드 이슈 분석 매트릭스")
-st.write("💡 정보 가치를 높이기 위해 단순 시황 및 보도성 뉴스인 **'시장 동향 일반' 데이터는 차트에서 제외**하고, 상품기획에 직결되는 핵심 비즈니스 이슈 밀도만 분석합니다.")
+st.write("💡 본 차트는 단순 시황 뉴스를 전면 배제하고, 상품기획에 직결되는 핵심 비즈니스 이슈 밀도만 분석합니다.")
 
 if not filtered_df.empty:
-    # 🎯 핵심 로직: 시각화 차트에서만 '시장 동향 일반' 데이터를 필터링하여 제거
-    chart_df = filtered_df[filtered_df["핵심키워드"] != "시장 동향 일반"]
+    pivot_df = filtered_df.groupby(["핵심키워드", "카테고리(상품)"]).size().reset_index(name="기사수")
     
-    if not chart_df.empty:
-        pivot_df = chart_df.groupby(["핵심키워드", "카테고리(상품)"]).size().reset_index(name="기사수")
-        
-        fig_heatmap = px.density_heatmap(
-            pivot_df, 
-            x="카테고리(상품)", 
-            y="핵심키워드", 
-            z="기사수",
-            text_auto=True,
-            color_continuous_scale="Purples",
-            labels={"카테고리(상품)": "보험 상품군", "핵심키워드": "이슈 키워드", "기사수": "발생 건수"}
-        )
-        
-        fig_heatmap.update_layout(
-            xaxis_title="보험 상품군",
-            yaxis_title="시장 핵심 키워드",
-            coloraxis_colorbar=dict(title="이슈 빈도")
-        )
-        st.plotly_chart(fig_heatmap, use_container_width=True)
-    else:
-        st.info("💡 현재 필터링된 범위 내에 '시장 동향 일반' 외의 특이 이슈 키워드가 발견되지 않았습니다. 하단 뉴스 원문을 참고해 주세요.")
+    fig_heatmap = px.density_heatmap(
+        pivot_df, 
+        x="카테고리(상품)", 
+        y="핵심키워드", 
+        z="기사수",
+        text_auto=True,
+        color_continuous_scale="Purples",
+        labels={"카테고리(상품)": "보험 상품군", "핵심키워드": "이슈 키워드", "기사수": "발생 건수"}
+    )
+    
+    fig_heatmap.update_layout(
+        xaxis_title="보험 상품군",
+        yaxis_title="시장 핵심 키워드",
+        coloraxis_colorbar=dict(title="이슈 빈도")
+    )
+    st.plotly_chart(fig_heatmap, use_container_width=True)
 else:
-    st.write("분석할 트렌드 데이터가 없습니다.")
+    st.info("💡 분석할 트렌드 데이터가 없습니다.")
 
 st.markdown("---")
 
-# 데이터 테이블 (여기서는 '시장 동향 일반'을 포함한 전체 뉴스를 읽을 수 있습니다)
-st.subheader("📰 실시간 수집 뉴스 데이터 매트릭스")
-st.data_editor(
-    filtered_df[["날짜", "카테고리(상품)", "언급보험사", "핵심키워드", "제목", "기사링크"]],
-    column_config={"기사링크": st.column_config.LinkColumn("원문 보기", display_text="🔗 이동하기")},
-    use_container_width=True, hide_index=True, disabled=True
-)
-
-st.markdown("---")
-
-# [3문장 주제 요약] & [데일리 인사이트 스크랩북] 2단 구성
+# ==========================================
+# 2. [하단] 3문장 주제 요약 & 데일리 인사이트 스크랩북 (2단 구성)
+# ==========================================
 bottom_col1, bottom_col2 = st.columns(2)
 
 with bottom_col1:
     st.subheader("🤖 기사 분석 및 3문장 주제 요약")
-    st.write("위 표에서 분석할 기사를 선택하면, 해당 기사의 비즈니스 맥락을 3문장으로 요약합니다.")
+    st.write("아래 뉴스 매트릭스 표에서 분석할 기사를 선택하면, 비즈니스 맥락을 3문장으로 요약합니다.")
     
     if not filtered_df.empty:
         selected_title = st.selectbox("📄 요약 및 스크랩할 기사를 선택하세요:", options=filtered_df["제목"].values)
@@ -219,3 +210,20 @@ with bottom_col2:
         st.markdown("📂 **나의 누적 스크랩 내역**")
         scrap_df = pd.DataFrame(st.session_state["scrap_storage"])
         st.dataframe(scrap_df, use_container_width=True, hide_index=True)
+
+st.markdown("---")
+
+# ==========================================
+# 3. [최하단] 실시간 수집 뉴스 데이터 매트릭스
+# ==========================================
+st.subheader("📰 실시간 핵심 뉴스 데이터 매트릭스 (정밀 필터링 100선)")
+st.write("💡 시장 동향 일반 뉴스가 제외된, 비즈니스 핵심 트렌드 기사 목록입니다. 위 요약 창 및 스크랩북과 연동됩니다.")
+
+if not filtered_df.empty:
+    st.data_editor(
+        filtered_df[["날짜", "카테고리(상품)", "언급보험사", "핵심키워드", "제목", "기사링크"]],
+        column_config={"기사링크": st.column_config.LinkColumn("원문 보기", display_text="🔗 이동하기")},
+        use_container_width=True, hide_index=True, disabled=True
+    )
+else:
+    st.write("조건에 맞는 핵심 뉴스가 없습니다.")

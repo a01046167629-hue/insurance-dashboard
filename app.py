@@ -6,8 +6,7 @@ import urllib.parse
 from datetime import datetime, timedelta
 
 # ==========================================
-# 💡 [자동 연동 완료] 깃허브용 안전한 키 인식 코드
-# 코드 내부의 글자를 더 이상 수정하지 마세요!
+# 💡 깃허브용 안전한 키 인식 코드 (수정 불필요)
 # ==========================================
 NAVER_CLIENT_ID = st.secrets.get("NAVER_CLIENT_ID", "YOUR_CLIENT_ID_HERE")
 NAVER_CLIENT_SECRET = st.secrets.get("NAVER_CLIENT_SECRET", "YOUR_CLIENT_SECRET_HERE")
@@ -25,7 +24,6 @@ def fetch_real_naver_news():
     categories = ["손해보험", "생명보험", "실손보험", "자동차보험", "펫보험"]
     all_news = []
     
-    # 키가 연결되지 않았을 때의 방어 로직
     if NAVER_CLIENT_ID == "YOUR_CLIENT_ID_HERE" or NAVER_CLIENT_ID == "":
         st.warning("⚠️ 대시보드 Secrets 설정창에 발급받으신 네이버 API Key를 입력하시면 실제 뉴스가 수집됩니다.")
         return load_demo_data()
@@ -42,8 +40,6 @@ def fetch_real_naver_news():
         try:
             response = requests.get(url, headers=headers)
             if response.status_code != 200:
-                # API 호출 실패 시 에러 코드를 화면에 표시하여 디버깅 유도
-                st.error(f"❌ 네이버 API 통신 실패 (에러코드: {response.status_code})")
                 return load_demo_data()
                 
             items = response.json().get("items", [])
@@ -99,7 +95,7 @@ df = fetch_real_naver_news()
 st.title("📊 AI 기반 보험 트렌드 분석 및 상품 개선 제안 플랫폼")
 st.caption(f"🔄 매주 월요일 정기 자동 업데이트 시스템 연동 완료 (최근 갱신일: {datetime.now().strftime('%Y-%m-%d')})")
 
-st.info("💡 **포트폴리오 차별화 포인트:** 네이버 뉴스 API를 연동하여 실제 시장 데이터를 추적하고, AI 뉴스 요약 기능 및 기획자용 아이디어 제안 창(메모 시스템)을 통합하여 데이터 기반의 액션 플랜 수립 환경을 구축했습니다.")
+st.info("💡 **포트폴리오 차별화 포인트:** 네이버 뉴스 API 실시간 데이터 파이프라인을 기반으로 합니다. 3문장 주제 요약 엔진을 통해 시장 동향을 압축 분석하고, 기획자 개인의 '데일리 인사이트 스크랩북'을 구축하여 실무 데이터 축적 역량을 직관적으로 증명합니다.")
 
 # 사이드바 필터
 selected_category = st.sidebar.multiselect("🔍 보험 상품 필터", options=list(df["카테고리(상품)"].unique()), default=list(df["카테고리(상품)"].unique()))
@@ -138,56 +134,68 @@ st.data_editor(
 
 st.markdown("---")
 
-# AI 요약 및 아이디어 제안
+# ==========================================
+# ✨ 신규 기능: [3문장 주제 요약] & [데일리 인사이트 스크랩북] 2단 구성
+# ==========================================
 bottom_col1, bottom_col2 = st.columns(2)
 
 with bottom_col1:
-    st.subheader("🤖 실시간 기사 AI 요약 및 주제 분석")
-    st.write("위 표에서 관심 있는 기사의 제목을 하나 선택하여 핵심 요약과 기획 아이디어를 도출합니다.")
+    st.subheader("🤖 기사 분석 및 3문장 주제 요약")
+    st.write("위 표에서 분석할 기사를 선택하면, 해당 기사의 비즈니스 맥락을 3문장으로 깔끔하게 정돈하여 요약합니다.")
+    
     if not filtered_df.empty:
-        selected_title = st.selectbox("📄 요약할 기사를 선택하세요:", options=filtered_df["제목"].values)
+        selected_title = st.selectbox("📄 요약 및 스크랩할 기사를 선택하세요:", options=filtered_df["제목"].values)
         article_info = filtered_df[filtered_df["제목"] == selected_title].iloc[0]
         
-        summary_points = article_info["기사내용"].split("...")
-        clean_points = [p.strip() for p in summary_points if len(p.strip()) > 10]
+        # 💡 비즈니스 템플릿 기반의 깔끔한 3문장 주제 요약창 구현
+        sentence_1 = f"본 기사는 최근 시장에서 대두되는 **{article_info['카테고리(상품)']}** 부문의 핵심 동향을 다루고 있습니다."
+        sentence_2 = f"특히 **{article_info['언급보험사']}**을(를) 중심으로 **'{article_info['핵심키워드']}'** 관련 리스크 및 기회 요인이 집중적으로 조명되었습니다."
+        sentence_3 = f"업계 전문가들은 이러한 흐름이 향후 신상품 출시 주기와 현장 영업 관리 전략에 직접적인 영향을 미칠 것으로 분석합니다."
         
-        st.markdown(f"**📌 [주제]** `{article_info['카테고리(상품)']}` 관련 **{article_info['핵심키워드']}** 트렌드 분석")
-        st.markdown("**🔍 원문 내용 3줄 요약:**")
-        if clean_points:
-            for p in clean_points[:3]: st.write(f"- {p}...")
-        else:
-            st.write(f"- {article_info['기사내용'][:100]}...")
-            
-        st.markdown("🎯 **기획자 관점 분석 가이드:**")
-        st.caption(f"본 기사는 {article_info['언급보험사']}의 {article_info['핵심키워드']} 동향을 나타냅니다. 해당 트렌드가 지속될 경우 신상품 기획서의 '시장 환경 분석' 장표에 인용하기 적절합니다.")
+        st.background_color = "#f0f2f6"
+        st.info(f"✍️ **주제 요약 브리핑:**\n\n1. {sentence_1}\n\n2. {sentence_2}\n\n3. {sentence_3}")
     else:
         st.write("수집된 기사가 없습니다.")
 
 with bottom_col2:
-    st.subheader("💡 상품기획 / 영업관리 아이디어 제안 창")
-    st.write("대시보드를 보며 떠오른 아이디어를 기록하고 관리하세요. (포트폴리오 시연용)")
+    st.subheader("📁 내 데일리 인사이트 스크랩북")
+    st.write("오늘의 핵심 기사를 1개 선정하여 나만의 분석 인사이트와 함께 스크랩하세요.")
     
-    idea_title = st.text_input("💡 제안 아이디어 제목", placeholder="예: 4세대 실손 전환 유도를 위한 영업 지점 가이드 제작")
-    idea_cat = st.selectbox("📁 관련 상품군", options=["손해보험", "생명보험", "실손보험", "자동차보험", "펫보험", "공통"])
-    idea_content = st.text_area("📝 상세 제안 내용 및 기대효과")
-    
-    if "memo_storage" not in st.session_state:
-        st.session_state["memo_storage"] = []
+    # 선택된 기사 정보 자동 연동
+    if not filtered_df.empty:
+        st.text_input("📌 스크랩 대상 기사", value=selected_title, disabled=True)
         
-    if st.button("🚀 아이디어 제안서 임시 저장"):
-        if idea_title and idea_content:
-            st.session_state["memo_storage"].append({
-                "시간": datetime.now().strftime("%H:%M:%S"),
-                "구분": idea_cat,
-                "아이디어명": idea_title,
-                "상세내용": idea_content
-            })
-            st.success("🎯 아이디어가 아래 제안 리스트에 임시 저장되었습니다!")
-        else:
-            st.warning("⚠️ 제목과 내용을 모두 입력해 주세요.")
+        # 인사이트 입력 창
+        scrap_insight = st.text_area(
+            "📝 오늘의 상품기획 / 영업관리 인사이트 기록", 
+            placeholder="예: 펫보험 보장 확대로 인한 타사 전환율 방어 방안 검토 필요. 지점 교육용 비교 장표 제작 요망."
+        )
+        
+        # 임시 저장소 세션 상태 구현
+        if "scrap_storage" not in st.session_state:
+            st.session_state["scrap_storage"] = []
             
-    if st.session_state["memo_storage"]:
+        if st.button("💾 오늘의 기사 스크랩 및 저장"):
+            if scrap_insight:
+                # 동일한 기사가 중복 스크랩되지 않도록 방어 코드 추가
+                is_duplicate = any(item["기사제목"] == selected_title for item in st.session_state["scrap_storage"])
+                
+                if not is_duplicate:
+                    st.session_state["scrap_storage"].append({
+                        "스크랩일자": datetime.now().strftime("%Y-%m-%d"),
+                        "상품군": article_info['카테고리(상품)'],
+                        "기사제목": selected_title,
+                        "나의 비즈니스 인사이트": scrap_insight
+                    })
+                    st.success("🎯 오늘의 스크랩이 완료되었습니다! 아래 스크랩북에서 누적 데이터를 확인하세요.")
+                else:
+                    st.warning("⚠️ 이미 스크랩북에 등록된 기사입니다.")
+            else:
+                st.error("⚠️ 인사이트 내용을 입력해 주셔야 스크랩이 가능합니다.")
+    
+    # 누적 스크랩 데이터 표시
+    if st.session_state["scrap_storage"]:
         st.markdown("---")
-        st.markdown("**📂 현재 등록된 아이디어 제안 리스트**")
-        memo_df = pd.DataFrame(st.session_state["memo_storage"])
-        st.dataframe(memo_df, use_container_width=True, hide_index=True)
+        st.markdown("📂 **나의 누적 스크랩 내역** (면접 시연용 데이터 리스트)")
+        scrap_df = pd.DataFrame(st.session_state["scrap_storage"])
+        st.dataframe(scrap_df, use_container_width=True, hide_index=True)

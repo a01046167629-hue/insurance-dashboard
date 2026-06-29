@@ -95,8 +95,6 @@ df = fetch_real_naver_news()
 st.title("📊 AI 기반 보험 트렌드 분석 및 상품 개선 제안 플랫폼")
 st.caption(f"🔄 매주 월요일 정기 자동 업데이트 시스템 연동 완료 (최근 갱신일: {datetime.now().strftime('%Y-%m-%d')})")
 
-st.info("💡 **포트폴리오 차별화 포인트:** 네이버 뉴스 API 실시간 데이터 파이프라인을 기반으로 합니다. 3문장 주제 요약 엔진을 통해 시장 동향을 압축 분석하고, 기획자 개인의 '데일리 인사이트 스크랩북'을 구축하여 실무 데이터 축적 역량을 직관적으로 증명합니다.")
-
 # 사이드바 필터
 selected_category = st.sidebar.multiselect("🔍 보험 상품 필터", options=list(df["카테고리(상품)"].unique()), default=list(df["카테고리(상품)"].unique()))
 filtered_df = df[df["카테고리(상품)"].isin(selected_category)]
@@ -135,24 +133,26 @@ st.data_editor(
 st.markdown("---")
 
 # ==========================================
-# ✨ 신규 기능: [3문장 주제 요약] & [데일리 인사이트 스크랩북] 2단 구성
+# 💡 [3문장 주제 요약] & [데일리 인사이트 스크랩북] 2단 구성
 # ==========================================
 bottom_col1, bottom_col2 = st.columns(2)
 
 with bottom_col1:
     st.subheader("🤖 기사 분석 및 3문장 주제 요약")
-    st.write("위 표에서 분석할 기사를 선택하면, 해당 기사의 비즈니스 맥락을 3문장으로 깔끔하게 정돈하여 요약합니다.")
+    st.write("위 표에서 분석할 기사를 선택하면, 해당 기사의 비즈니스 맥락을 3문장으로 요약합니다.")
     
     if not filtered_df.empty:
         selected_title = st.selectbox("📄 요약 및 스크랩할 기사를 선택하세요:", options=filtered_df["제목"].values)
         article_info = filtered_df[filtered_df["제목"] == selected_title].iloc[0]
         
-        # 💡 비즈니스 템플릿 기반의 깔끔한 3문장 주제 요약창 구현
+        # 🔗 추가된 기능: 선택한 기사의 원문 링크 버튼 제공
+        st.link_button("🔗 선택한 기사 원문 읽기", article_info["기사링크"])
+        
+        # 비즈니스 템플릿 기반의 깔끔한 3문장 주제 요약창
         sentence_1 = f"본 기사는 최근 시장에서 대두되는 **{article_info['카테고리(상품)']}** 부문의 핵심 동향을 다루고 있습니다."
         sentence_2 = f"특히 **{article_info['언급보험사']}**을(를) 중심으로 **'{article_info['핵심키워드']}'** 관련 리스크 및 기회 요인이 집중적으로 조명되었습니다."
         sentence_3 = f"업계 전문가들은 이러한 흐름이 향후 신상품 출시 주기와 현장 영업 관리 전략에 직접적인 영향을 미칠 것으로 분석합니다."
         
-        st.background_color = "#f0f2f6"
         st.info(f"✍️ **주제 요약 브리핑:**\n\n1. {sentence_1}\n\n2. {sentence_2}\n\n3. {sentence_3}")
     else:
         st.write("수집된 기사가 없습니다.")
@@ -161,23 +161,19 @@ with bottom_col2:
     st.subheader("📁 내 데일리 인사이트 스크랩북")
     st.write("오늘의 핵심 기사를 1개 선정하여 나만의 분석 인사이트와 함께 스크랩하세요.")
     
-    # 선택된 기사 정보 자동 연동
     if not filtered_df.empty:
         st.text_input("📌 스크랩 대상 기사", value=selected_title, disabled=True)
         
-        # 인사이트 입력 창
         scrap_insight = st.text_area(
             "📝 오늘의 상품기획 / 영업관리 인사이트 기록", 
             placeholder="예: 펫보험 보장 확대로 인한 타사 전환율 방어 방안 검토 필요. 지점 교육용 비교 장표 제작 요망."
         )
         
-        # 임시 저장소 세션 상태 구현
         if "scrap_storage" not in st.session_state:
             st.session_state["scrap_storage"] = []
             
         if st.button("💾 오늘의 기사 스크랩 및 저장"):
             if scrap_insight:
-                # 동일한 기사가 중복 스크랩되지 않도록 방어 코드 추가
                 is_duplicate = any(item["기사제목"] == selected_title for item in st.session_state["scrap_storage"])
                 
                 if not is_duplicate:
@@ -193,9 +189,8 @@ with bottom_col2:
             else:
                 st.error("⚠️ 인사이트 내용을 입력해 주셔야 스크랩이 가능합니다.")
     
-    # 누적 스크랩 데이터 표시
     if st.session_state["scrap_storage"]:
         st.markdown("---")
-        st.markdown("📂 **나의 누적 스크랩 내역** (면접 시연용 데이터 리스트)")
+        st.markdown("📂 **나의 누적 스크랩 내역**")
         scrap_df = pd.DataFrame(st.session_state["scrap_storage"])
         st.dataframe(scrap_df, use_container_width=True, hide_index=True)

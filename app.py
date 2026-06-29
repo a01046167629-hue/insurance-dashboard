@@ -7,8 +7,8 @@ from datetime import datetime, timedelta
 
 # ==========================================
 # [중요] 여기에 발급받으신 네이버 API 키를 입력하세요!
-NAVER_CLIENT_ID = "8e30e3vQNamETrO7o7EN"
-NAVER_CLIENT_SECRET = "8vN1V8T846"
+NAVER_CLIENT_ID = "YOUR_CLIENT_ID_HERE"
+NAVER_CLIENT_SECRET = "YOUR_CLIENT_SECRET_HERE"
 # ==========================================
 
 st.set_page_config(

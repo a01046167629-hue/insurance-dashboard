@@ -6,7 +6,8 @@ import urllib.parse
 from datetime import datetime, timedelta
 
 # ==========================================
-# 💡 Streamlit Cloud 서버용 비밀키 자동 연동 방식
+# 💡 [자동 연동 완료] 깃허브용 안전한 키 인식 코드
+# 코드 내부의 글자를 더 이상 수정하지 마세요!
 # ==========================================
 NAVER_CLIENT_ID = st.secrets.get("NAVER_CLIENT_ID", "YOUR_CLIENT_ID_HERE")
 NAVER_CLIENT_SECRET = st.secrets.get("NAVER_CLIENT_SECRET", "YOUR_CLIENT_SECRET_HERE")
@@ -24,8 +25,9 @@ def fetch_real_naver_news():
     categories = ["손해보험", "생명보험", "실손보험", "자동차보험", "펫보험"]
     all_news = []
     
-    if "YOUR_CLIENT_ID" in NAVER_CLIENT_ID or NAVER_CLIENT_ID == "":
-        st.warning("⚠️ 코드를 열어 네이버 API Key(Client ID/Secret)를 입력하시면 실제 뉴스가 수집됩니다.")
+    # 키가 연결되지 않았을 때의 방어 로직
+    if NAVER_CLIENT_ID == "YOUR_CLIENT_ID_HERE" or NAVER_CLIENT_ID == "":
+        st.warning("⚠️ 대시보드 Secrets 설정창에 발급받으신 네이버 API Key를 입력하시면 실제 뉴스가 수집됩니다.")
         return load_demo_data()
 
     headers = {
@@ -40,6 +42,8 @@ def fetch_real_naver_news():
         try:
             response = requests.get(url, headers=headers)
             if response.status_code != 200:
+                # API 호출 실패 시 에러 코드를 화면에 표시하여 디버깅 유도
+                st.error(f"❌ 네이버 API 통신 실패 (에러코드: {response.status_code})")
                 return load_demo_data()
                 
             items = response.json().get("items", [])
@@ -86,13 +90,13 @@ def load_demo_data():
     return pd.DataFrame([{
         "날짜": datetime.now().strftime("%Y-%m-%d"), "카테고리(상품)": "펫보험", 
         "언급보험사": "KB손해보험", "핵심키워드": "수가", 
-        "제목": "실시간 뉴스 연동 대기 중입니다.", "기사내용": "본문 예시입니다.", "기사링크": "https://news.naver.com"
+        "제목": "실시간 뉴스 연동 대기 중입니다. Secrets 설정을 확인해 주세요.", "기사내용": "본문 예시입니다.", "기사링크": "https://news.naver.com"
     }])
 
 df = fetch_real_naver_news()
 
 # --- 대시보드 화면 렌더링 영역 ---
-st.title(" Bars AI 기반 보험 트렌드 분석 및 상품 개선 제안 플랫폼")
+st.title("📊 AI 기반 보험 트렌드 분석 및 상품 개선 제안 플랫폼")
 st.caption(f"🔄 매주 월요일 정기 자동 업데이트 시스템 연동 완료 (최근 갱신일: {datetime.now().strftime('%Y-%m-%d')})")
 
 st.info("💡 **포트폴리오 차별화 포인트:** 네이버 뉴스 API를 연동하여 실제 시장 데이터를 추적하고, AI 뉴스 요약 기능 및 기획자용 아이디어 제안 창(메모 시스템)을 통합하여 데이터 기반의 액션 플랜 수립 환경을 구축했습니다.")
@@ -134,32 +138,23 @@ st.data_editor(
 
 st.markdown("---")
 
-# ==========================================
-# ✨ 신규 기능: [AI 뉴스 요약] & [아이디어 제안 메모창] 2단 구성
-# ==========================================
+# AI 요약 및 아이디어 제안
 bottom_col1, bottom_col2 = st.columns(2)
 
 with bottom_col1:
     st.subheader("🤖 실시간 기사 AI 요약 및 주제 분석")
-    st.write("위 표에서 관심 있는 기사의 제목을 하나 복사하거나 선택해서 입력하면 핵심 요약과 기획 아이디어를 도출합니다.")
-    
-    # 사용자가 직접 고를 수 있는 셀렉트 박스 제공
+    st.write("위 표에서 관심 있는 기사의 제목을 하나 선택하여 핵심 요약과 기획 아이디어를 도출합니다.")
     if not filtered_df.empty:
         selected_title = st.selectbox("📄 요약할 기사를 선택하세요:", options=filtered_df["제목"].values)
-        
-        # 선택된 기사의 본문 내용 가져오기
         article_info = filtered_df[filtered_df["제목"] == selected_title].iloc[0]
         
-        # 💡 규칙 기반 요약 엔진 구현 (초보자가 비용 없이 무한으로 쓸 수 있는 알고리즘 요약)
         summary_points = article_info["기사내용"].split("...")
         clean_points = [p.strip() for p in summary_points if len(p.strip()) > 10]
         
-        # 화면에 요약문 출력
         st.markdown(f"**📌 [주제]** `{article_info['카테고리(상품)']}` 관련 **{article_info['핵심키워드']}** 트렌드 분석")
         st.markdown("**🔍 원문 내용 3줄 요약:**")
         if clean_points:
-            for p in clean_points[:3]:
-                st.write(f"- {p}...")
+            for p in clean_points[:3]: st.write(f"- {p}...")
         else:
             st.write(f"- {article_info['기사내용'][:100]}...")
             
@@ -172,12 +167,10 @@ with bottom_col2:
     st.subheader("💡 상품기획 / 영업관리 아이디어 제안 창")
     st.write("대시보드를 보며 떠오른 아이디어를 기록하고 관리하세요. (포트폴리오 시연용)")
     
-    # 메모 입력란 생성
     idea_title = st.text_input("💡 제안 아이디어 제목", placeholder="예: 4세대 실손 전환 유도를 위한 영업 지점 가이드 제작")
     idea_cat = st.selectbox("📁 관련 상품군", options=["손해보험", "생명보험", "실손보험", "자동차보험", "펫보험", "공통"])
-    idea_content = st.text_area("📝 상세 제안 내용 및 기대효과", placeholder="뉴스 트렌드를 반영한 구체적인 실행 방안을 적어보세요.")
+    idea_content = st.text_area("📝 상세 제안 내용 및 기대효과")
     
-    # 저장 버튼 기능 (컴퓨터 메모리에 실시간 누적 저장)
     if "memo_storage" not in st.session_state:
         st.session_state["memo_storage"] = []
         
@@ -193,7 +186,6 @@ with bottom_col2:
         else:
             st.warning("⚠️ 제목과 내용을 모두 입력해 주세요.")
             
-    # 저장된 아이디어 리스트 보여주기
     if st.session_state["memo_storage"]:
         st.markdown("---")
         st.markdown("**📂 현재 등록된 아이디어 제안 리스트**")

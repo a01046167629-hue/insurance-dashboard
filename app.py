@@ -70,7 +70,7 @@ def fetch_real_naver_news():
                         extracted_kw = kw
                         break
 
-                # 🎯 [필터 로직] '시장 동향 일반' 뉴스는 원천적으로 제외하고 저장
+                # '시장 동향 일반' 뉴스는 원천적으로 제외하고 저장
                 if extracted_kw != "시장 동향 일반":
                     all_news.append({
                         "날짜": formatted_date,
@@ -121,7 +121,7 @@ with col3:
 st.markdown("---")
 
 # ==========================================
-# 1. [중간] 트렌드 이슈 분석 매트릭스 (시각화 보드)
+# 1. 트렌드 이슈 분석 매트릭스 (시각화 보드)
 # ==========================================
 st.subheader("🧩 보험 상품군별 핵심 트렌드 이슈 분석 매트릭스")
 st.write("💡 본 차트는 단순 시황 뉴스를 전면 배제하고, 상품기획에 직결되는 핵심 비즈니스 이슈 밀도만 분석합니다.")
@@ -151,13 +151,13 @@ else:
 st.markdown("---")
 
 # ==========================================
-# 2. [하단] 3문장 주제 요약 & 데일리 인사이트 스크랩북 (2단 구성)
+# 2. 3문장 주제 요약 & 데일리 인사이트 스크랩북 (2단 구성)
 # ==========================================
 bottom_col1, bottom_col2 = st.columns(2)
 
 with bottom_col1:
     st.subheader("🤖 기사 분석 및 3문장 주제 요약")
-    st.write("아래 뉴스 매트릭스 표에서 분석할 기사를 선택하면, 비즈니스 맥락을 3문장으로 요약합니다.")
+    st.write("아래 뉴스 매트릭스 표에서 분석할 기사를 선택하면, 기사 내부의 실제 핵심 키워드를 추출해 요약하고 원문 문장을 표기합니다.")
     
     if not filtered_df.empty:
         selected_title = st.selectbox("📄 요약 및 스크랩할 기사를 선택하세요:", options=filtered_df["제목"].values)
@@ -165,11 +165,28 @@ with bottom_col1:
         
         st.link_button("🔗 선택한 기사 원문 읽기", article_info["기사링크"])
         
-        sentence_1 = f"본 기사는 최근 시장에서 대두되는 **{article_info['카테고리(상품)']}** 부문의 핵심 동향을 다루고 있습니다."
-        sentence_2 = f"특히 **{article_info['언급보험사']}**을(를) 중심으로 **'{article_info['핵심키워드']}'** 관련 리스크 및 기회 요인이 집중적으로 조명되었습니다."
-        sentence_3 = f"업계 전문가들은 이러한 흐름이 향후 신상품 출시 주기와 현장 영업 관리 전략에 직접적인 영향을 미칠 것으로 분석합니다."
+        # 🎯 [개선] 기사 내부의 실제 핵심 키워드 단어들을 추적해서 3문장 요약 생성
+        sentence_1 = f"해당 기사는 현재 시장에서 화두가 되고 있는 **'{article_info['카테고리(상품)']}'** 시장의 트렌드 변화와 실제 보도 내용을 기반으로 합니다."
+        sentence_2 = f"본문 내에서는 구체적으로 **'{article_info['핵심키워드']}'** 관점의 분석이 다뤄졌으며, 관련 플레이어로 **'{article_info['언급보험사']}'**의 동향이 언급되었습니다."
+        sentence_3 = f"결과적으로 이 데이터는 **'{article_info['핵심키워드']}'** 이슈가 산업 전반에 미칠 파급력을 실제 단어 지표를 통해 직관적으로 증명하고 있습니다."
         
-        st.info(f"✍️ **주제 요약 브리핑:**\n\n1. {sentence_1}\n\n2. {sentence_2}\n\n3. {sentence_3}")
+        st.info(f"✍️ **실제 키워드 기반 주제 요약:**\n\n1. {sentence_1}\n\n2. {sentence_2}\n\n3. {sentence_3}")
+        
+        # 🎯 [신규 기능] 기사 원문 본문 내용을 편집 없이 그대로 슬라이싱해서 3문장 출력하는 칸
+        st.markdown("🔍 **원문 핵심 문장 (편집 없음):**")
+        raw_text = article_info["기사내용"]
+        # 문장 부호 단위로 분리하고 공백 제거 및 유효한 문장 추출
+        raw_sentences = [s.strip() for s in raw_text.replace("!", ".").replace("?", ".").split(".") if len(s.strip()) > 8]
+        
+        if len(raw_sentences) >= 3:
+            for i, sent in enumerate(raw_sentences[:3]):
+                st.write(f"{i+1}. {sent}.")
+        elif len(raw_sentences) > 0:
+            for i, sent in enumerate(raw_sentences):
+                st.write(f"{i+1}. {sent}.")
+        else:
+            st.write(f"1. {raw_text}")
+            
     else:
         st.write("수집된 기사가 없습니다.")
 
@@ -214,7 +231,7 @@ with bottom_col2:
 st.markdown("---")
 
 # ==========================================
-# 3. [최하단] 실시간 수집 뉴스 데이터 매트릭스
+# 3. 실시간 수집 뉴스 데이터 매트릭스
 # ==========================================
 st.subheader("📰 실시간 핵심 뉴스 데이터 매트릭스 (정밀 필터링 100선)")
 st.write("💡 시장 동향 일반 뉴스가 제외된, 비즈니스 핵심 트렌드 기사 목록입니다. 위 요약 창 및 스크랩북과 연동됩니다.")

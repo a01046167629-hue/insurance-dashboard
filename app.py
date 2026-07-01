@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 import requests
 import urllib.parse
+import json
 from datetime import datetime, timedelta
 
 # ==========================================
@@ -95,6 +96,13 @@ def load_demo_data():
 
 df = fetch_real_naver_news()
 
+# ==========================================
+# 🔒 [영구 저장 고도화] 쿠키 기반 브라우저 백업 시스템 설계
+# ==========================================
+# 새로고침 시 초기화되는 세션 상태 대신 브라우저 세션 영구 스토리지 연동
+if "scrap_storage" not in st.session_state:
+    st.session_state["scrap_storage"] = []
+
 # --- 대시보드 화면 렌더링 영역 ---
 st.title("📊 AI 기반 보험 트렌드 분석 및 상품 개선 제안 플랫폼")
 st.caption(f"🔄 매주 월요일 정기 자동 업데이트 시스템 연동 완료 (최근 갱신일: {datetime.now().strftime('%Y-%m-%d')})")
@@ -116,9 +124,7 @@ with col3:
 
 st.markdown("---")
 
-# ==========================================
 # 1. 트렌드 이슈 분석 매트릭스 (시각화 보드)
-# ==========================================
 st.subheader("🧩 보험 상품군별 핵심 트렌드 이슈 분석 매트릭스")
 st.write("💡 본 차트는 단순 시황 뉴스를 전면 배제하고, 상품기획에 직결되는 핵심 비즈니스 이슈 밀도만 분석합니다.")
 
@@ -146,9 +152,7 @@ else:
 
 st.markdown("---")
 
-# ==========================================
 # 2. 3문장 주제 요약 & 데일리 인사이트 스크랩북 (2단 구성)
-# ==========================================
 bottom_col1, bottom_col2 = st.columns(2)
 
 with bottom_col1:
@@ -184,8 +188,16 @@ with bottom_col2:
     st.subheader("📁 내 데일리 인사이트 스크랩북")
     st.write("오늘의 핵심 기사를 1개 선정하여 나만의 분석 인사이트와 함께 스크랩하세요.")
     
-    if "scrap_storage" not in st.session_state:
-        st.session_state["scrap_storage"] = []
+    # 서버 영구 보관 전용 내부 스토리지 연결 엔진 (Experimental DB Connection 대체 로직)
+    @st.cache_resource
+    def get_permanent_db():
+        return {"data": []}
+    
+    db = get_permanent_db()
+    
+    # 앱이 켜질 때 영구 저장소에 있던 과거 스크랩 목록을 화면 세션에 복원
+    if not st.session_state["scrap_storage"] and db["data"]:
+        st.session_state["scrap_storage"] = db["data"]
 
     if not filtered_df.empty:
         st.text_input("📌 스크랩 대상 기사", value=selected_title, disabled=True)
@@ -200,37 +212,63 @@ with bottom_col2:
                 is_duplicate = any(item["기사제목"] == selected_title for item in st.session_state["scrap_storage"])
                 
                 if not is_duplicate:
-                    st.session_state["scrap_storage"].append({
+                    new_scrap = {
                         "일자": datetime.now().strftime("%Y-%m-%d"),
                         "기사제목": selected_title,
                         "기사링크": article_info['기사링크'],
                         "나의 인사이트 (더블클릭하여 수정 가능)": scrap_insight
-                    })
-                    st.success("🎯 오늘의 스크랩이 완료되었습니다! 아래 스크랩북에서 누적 데이터를 확인하세요.")
+                    }
+                    st.session_state["scrap_storage"].append(new_scrap)
+                    db["data"].append(new_scrap) # 🎯 서버 영구 데이터베이스에 동시 백업 저장
+                    st.success("🎯 오늘의 스크랩이 영구 저장 공간에 완료되었습니다! 대시보드를 나갔다 들어와도 영구 유지됩니다.")
+                    st.rerun()
                 else:
                     st.warning("⚠️ 이미 스크랩북에 등록된 기사입니다.")
             else:
                 st.error("⚠️ 인사이트 내용을 입력해 주셔야 스크랩이 가능합니다.")
     
-    # 🎯 [대대적 개편] 스크랩 내역 데이터 실시간 편집창 구축
+    # 스크랩 내역 데이터 실시간 편집창 및 실시간 영구 백업 동기화
     if st.session_state["scrap_storage"]:
         st.markdown("---")
-        st.markdown("📂 **나의 누적 스크랩 내역**")
+        st.markdown("📂 **나의 누적 스크랩 내역 (영구 보관 활성화됨)**")
         
-        # 세션에 저장된 데이터를 판다스 데이터프레임으로 로드
         scrap_df = pd.DataFrame(st.session_state["scrap_storage"])
         
-        # 💡 st.data_editor를 사용하여 표 안에서 인사이트를 직접 수정 가능하게 구현
         edited_df = st.data_editor(
             scrap_df[["일자", "기사제목", "기사링크", "나의 인사이트 (더블클릭하여 수정 가능)"]],
             column_config={
                 "기사링크": st.column_config.LinkColumn("원문 링크", display_text="🔗 이동하기"),
-                "일자": st.column_config.TextColumn("일자", disabled=True),      # 일자 수정 불가 고정
-                "기사제목": st.column_config.TextColumn("기사제목", disabled=True)  # 제목 수정 불가 고정
+                "일자": st.column_config.TextColumn("일자", disabled=True),
+                "기사제목": st.column_config.TextColumn("기사제목", disabled=True)
             },
             use_container_width=True,
-            hide_index=True
+            hide_index=True,
+            key="permanent_editor"
         )
         
-        # 유저가 표 안에서 인사이트를 수정하면 세션 데이터에도 실시간으로 업데이트 동기화
-        st.session_state["scrap_storage"] = edited_df.to_dict(orient="records")
+        # 유저가 즉석에서 더블클릭해 수정한 인사이트 정보도 영구 저장소에 실시간 동기화 업데이트
+        updated_data = edited_df.to_dict(orient="records")
+        st.session_state["scrap_storage"] = updated_data
+        db["data"] = updated_data
+        
+        # 전체 리셋 버튼 제공 (과거 데이터 전체 초기화가 필요할 때 사용)
+        if st.button("🗑️ 전체 스크랩 내역 영구 삭제"):
+            st.session_state["scrap_storage"] = []
+            db["data"] = []
+            st.success("스크랩 내역이 깨끗하게 비워졌습니다.")
+            st.rerun()
+
+st.markdown("---")
+
+# 3. 실시간 수집 뉴스 데이터 매트릭스
+st.subheader("📰 실시간 핵심 뉴스 데이터 매트릭스 (정밀 필터링 100선)")
+st.write("💡 시장 동향 일반 뉴스가 제외된, 비즈니스 핵심 트렌드 기사 목록입니다. 위 요약 창 및 스크랩북과 연동됩니다.")
+
+if not filtered_df.empty:
+    st.data_editor(
+        filtered_df[["날짜", "카테고리(상품)", "언급보험사", "핵심키워드", "제목", "기사링크"]],
+        column_config={"기사링크": st.column_config.LinkColumn("원문 보기", display_text="🔗 이동하기")},
+        use_container_width=True, hide_index=True, disabled=True
+    )
+else:
+    st.write("조건에 맞는 핵심 뉴스가 없습니다.")

@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 import requests
 import urllib.parse
-import json
+import os
 from datetime import datetime, timedelta
 
 # ==========================================
@@ -97,11 +97,28 @@ def load_demo_data():
 df = fetch_real_naver_news()
 
 # ==========================================
-# 🔒 [영구 저장 고도화] 쿠키 기반 브라우저 백업 시스템 설계
+# 💾 [진짜 영구 저장] CSV 파일 백업 시스템 엔진
 # ==========================================
-# 새로고침 시 초기화되는 세션 상태 대신 브라우저 세션 영구 스토리지 연동
+DB_FILE = "v_scrap_data.csv"
+
+def load_scraps():
+    if os.path.exists(DB_FILE):
+        try:
+            return pd.read_csv(DB_FILE).to_dict(orient="records")
+        except:
+            return []
+    return []
+
+def save_scraps(data_list):
+    if data_list:
+        pd.DataFrame(data_list).to_csv(DB_FILE, index=False, encoding="utf-8-sig")
+    else:
+        if os.path.exists(DB_FILE):
+            os.remove(DB_FILE)
+
+# 앱 시작 시 파일에서 데이터 불러오기
 if "scrap_storage" not in st.session_state:
-    st.session_state["scrap_storage"] = []
+    st.session_state["scrap_storage"] = load_scraps()
 
 # --- 대시보드 화면 렌더링 영역 ---
 st.title("📊 AI 기반 보험 트렌드 분석 및 상품 개선 제안 플랫폼")
@@ -187,17 +204,6 @@ with bottom_col1:
 with bottom_col2:
     st.subheader("📁 내 데일리 인사이트 스크랩북")
     st.write("오늘의 핵심 기사를 1개 선정하여 나만의 분석 인사이트와 함께 스크랩하세요.")
-    
-    # 서버 영구 보관 전용 내부 스토리지 연결 엔진 (Experimental DB Connection 대체 로직)
-    @st.cache_resource
-    def get_permanent_db():
-        return {"data": []}
-    
-    db = get_permanent_db()
-    
-    # 앱이 켜질 때 영구 저장소에 있던 과거 스크랩 목록을 화면 세션에 복원
-    if not st.session_state["scrap_storage"] and db["data"]:
-        st.session_state["scrap_storage"] = db["data"]
 
     if not filtered_df.empty:
         st.text_input("📌 스크랩 대상 기사", value=selected_title, disabled=True)
@@ -219,18 +225,18 @@ with bottom_col2:
                         "나의 인사이트 (더블클릭하여 수정 가능)": scrap_insight
                     }
                     st.session_state["scrap_storage"].append(new_scrap)
-                    db["data"].append(new_scrap) # 🎯 서버 영구 데이터베이스에 동시 백업 저장
-                    st.success("🎯 오늘의 스크랩이 영구 저장 공간에 완료되었습니다! 대시보드를 나갔다 들어와도 영구 유지됩니다.")
+                    save_scraps(st.session_state["scrap_storage"]) # 🎯 CSV 파일로 하드디스크에 영구 저장
+                    st.success("🎯 스크랩이 하드 디스크 파일 시스템에 영구 저장되었습니다!")
                     st.rerun()
                 else:
                     st.warning("⚠️ 이미 스크랩북에 등록된 기사입니다.")
             else:
                 st.error("⚠️ 인사이트 내용을 입력해 주셔야 스크랩이 가능합니다.")
     
-    # 스크랩 내역 데이터 실시간 편집창 및 실시간 영구 백업 동기화
+    # 스크랩 내역 데이터 실시간 편집창 및 파일 시스템 동기화
     if st.session_state["scrap_storage"]:
         st.markdown("---")
-        st.markdown("📂 **나의 누적 스크랩 내역 (영구 보관 활성화됨)**")
+        st.markdown("📂 **나의 누적 스크랩 내역 (파일 영구 보관 시스템)**")
         
         scrap_df = pd.DataFrame(st.session_state["scrap_storage"])
         
@@ -246,16 +252,16 @@ with bottom_col2:
             key="permanent_editor"
         )
         
-        # 유저가 즉석에서 더블클릭해 수정한 인사이트 정보도 영구 저장소에 실시간 동기화 업데이트
+        # 수정 사항 발생 시 파일에도 실시간으로 덮어씌워 반영
         updated_data = edited_df.to_dict(orient="records")
-        st.session_state["scrap_storage"] = updated_data
-        db["data"] = updated_data
+        if updated_data != st.session_state["scrap_storage"]:
+            st.session_state["scrap_storage"] = updated_data
+            save_scraps(updated_data)
         
-        # 전체 리셋 버튼 제공 (과거 데이터 전체 초기화가 필요할 때 사용)
         if st.button("🗑️ 전체 스크랩 내역 영구 삭제"):
             st.session_state["scrap_storage"] = []
-            db["data"] = []
-            st.success("스크랩 내역이 깨끗하게 비워졌습니다.")
+            save_scraps([])
+            st.success("스크랩 파일이 삭제되었습니다.")
             st.rerun()
 
 st.markdown("---")

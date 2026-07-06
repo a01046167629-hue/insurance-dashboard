@@ -30,18 +30,16 @@ st.set_page_config(
     layout="wide"
 )
 
-# 🎯 [한글 패치 핵심 오케스트레이션] 온라인에서 나눔고딕 폰트를 실시간으로 다운로드하여 등록
+# 🎯 온라인에서 나눔고딕 폰트를 실시간으로 다운로드하여 등록 (한글 깨집 방지)
 @st.cache_resource
 def init_korean_font():
     font_url = "https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Regular.ttf"
     font_bold_url = "https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Bold.ttf"
     
     try:
-        # 일반 폰트 다운로드 및 등록
         r = requests.get(font_url, timeout=10)
         pdfmetrics.registerFont(TTFont('NanumGothic', io.BytesIO(r.content)))
         
-        # 볼드 폰트 다운로드 및 등록
         rb = requests.get(font_bold_url, timeout=10)
         pdfmetrics.registerFont(TTFont('NanumGothic-Bold', io.BytesIO(rb.content)))
         return True
@@ -156,7 +154,6 @@ def generate_pdf_report(source_df):
     doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
     story = []
     
-    # 다운로드된 나눔고딕 폰트 적용 (실패 시 기본 헬베티카로 롤백하되, 성공 시 완벽 작동)
     font_name = 'NanumGothic' if has_korean_font else 'Helvetica'
     font_bold_name = 'NanumGothic-Bold' if has_korean_font else 'Helvetica-Bold'
     
@@ -166,12 +163,11 @@ def generate_pdf_report(source_df):
     body_style = ParagraphStyle('PDFBody', parent=styles['Normal'], fontName=font_name, fontSize=10, leading=16, spaceAfter=6)
     bullet_style = ParagraphStyle('PDFBullet', parent=body_style, leftIndent=15, firstLineIndent=-10)
 
-    # 1. 타이틀 헤더 (한국어 정형화)
+    # 1. 타이틀 헤더
     story.append(Paragraph("📈 2026년 7월 보험시장 트렌드 분석 리포트", title_style))
     story.append(Paragraph(f"발행일자: {datetime.now().strftime('%Y-%m-%d')} | 데이터 분석 출처: 실시간 마켓 인텔리전스 시스템", body_style))
     story.append(Spacer(1, 15))
     
-    # 데이터 통계 가공
     if not source_df.empty:
         top_keywords = list(source_df['핵심키워드'].value_counts().head(3).index)
         top_company = source_df['언급보험사'].value_counts().index[0]
@@ -213,7 +209,6 @@ def generate_pdf_report(source_df):
     story.append(Paragraph("• **신규 테크니컬 리스크 선제 담보화:** 자율주행 고도화 등 신기술과 연동된 제조사 배상 및 운전자 책임 소재 리스크를 정밀 계량화하여 전용 특약을 선제적으로 시장에 출시하는 플레이어가 향후 M/S 선점의 열쇠를 쥐게 될 것입니다.", bullet_style))
     story.append(Paragraph("• **AI 기반 UWD 및 세부 담보 분리:** 비급여 지급 생태계 방어를 위해 가입 심사(Underwriting) 프로세스에 AI 모니터링 모듈을 고도화하고, 상품 기획 단계부터 세부 담보를 독립 특약 형태로 촘촘하게 분리 설계할 것을 강력히 제안합니다.", bullet_style))
 
-    # PDF 빌드 실행
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
@@ -223,70 +218,4 @@ def generate_pdf_report(source_df):
 st.title("📊 AI 기반 보험 트렌드 분석 및 상품 개선 제안 플랫폼")
 st.caption(f"🔄 매주 월요일 정기 자동 업데이트 시스템 연동 완료 (최근 갱신일: {datetime.now().strftime('%Y-%m-%d')})")
 
-# 사이드바 필터 시스템
-selected_category = st.sidebar.multiselect("🔍 보험 상품 필터", options=list(df["카테고리(상품)"].unique()) if not df.empty else ["펫보험"], default=list(df["카테고리(상품)"].unique()) if not df.empty else ["펫보험"])
-filtered_df = df[df["카테고리(상품)"].isin(selected_category)] if not df.empty else df
-
-# 📄 사이드바 최상단 리포트 다운로드 구역 (한글화 패치 장착)
-st.sidebar.markdown("---")
-st.sidebar.subheader("📥 월간 경영 리포트")
-with st.sidebar:
-    try:
-        pdf_data = generate_pdf_report(filtered_df)
-        st.download_button(
-            label="📄 2026년 7월 보험 리포트 PDF 다운로드",
-            data=pdf_data,
-            file_name=f"보험시장_트렌드_리포트_{datetime.now().strftime('%Y%m%d')}.pdf",
-            mime="application/pdf",
-            use_container_width=True
-        )
-    except Exception as pdf_err:
-        st.error(f"리포트 빌드 대기 중: {pdf_err}")
-st.sidebar.markdown("---")
-
-# 주요 지표 (Metric)
-col1, col2, col3 = st.columns(3)
-with col1: st.metric("📋 주간 정밀 수집 뉴스", f"{len(filtered_df)} 건 / 100 건")
-with col2: st.metric("🎯 최다 발생 비즈니스 이슈", filtered_df["핵심키워드"].value_counts().index[0] if not filtered_df.empty else "-")
-with col3: st.metric("🔥 트렌드 집중 상품군", filtered_df["카테고리(상품)"].value_counts().index[0] if not filtered_df.empty else "-")
-
-st.markdown("---")
-
-# 1. 트렌드 이슈 분석 매트릭스
-if not filtered_df.empty:
-    pivot_df = filtered_df.groupby(["핵심키워드", "카테고리(상품)"]).size().reset_index(name="기사수")
-    fig_heatmap = px.density_heatmap(pivot_df, x="카테고리(상품)", y="핵심키워드", z="기사수", text_auto=True, color_continuous_scale="Purples")
-    st.plotly_chart(fig_heatmap, use_container_width=True)
-
-st.markdown("---")
-
-# 2. 3문장 주제 요약 & 데일리 인사이트 스크랩북 (2단 구성)
-bottom_col1, bottom_col2 = st.columns(2)
-
-with bottom_col1:
-    st.subheader("🤖 기사 분석 및 3문장 주제 요약")
-    if not filtered_df.empty:
-        selected_title = st.selectbox("📄 요약 및 스크랩할 기사를 선택하세요:", options=filtered_df["제목"].values)
-        article_info = filtered_df[filtered_df["제목"] == selected_title].iloc[0]
-        st.link_button("🔗 선택한 기사 원문 읽기", article_info["기사링크"])
-        
-        s1 = f"해당 기사는 현재 시장에서 화두가 되고 있는 **'{article_info['카테고리(상품)']}'** 시장의 트렌드 변화와 실제 보도 내용을 기반으로 합니다."
-        s2 = f"본문 내에서는 구체적으로 **'{article_info['핵심키워드']}'** 관점의 분석이 다뤄졌으며, 관련 플레이어로 **'{article_info['언급보험사']}'**의 동향이 언급되었습니다."
-        s3 = f"결과적으로 이 데이터는 **'{article_info['핵심키워드']}'** 이슈가 산업 전반에 미칠 파급력을 실제 단어 지표를 통해 직관적으로 증명하고 있습니다."
-        st.info(f"✍️ **실제 키워드 기반 주제 요약:**\n\n1. {s1}\n\n2. {s2}\n\n3. {s3}")
-        
-        st.markdown("🔍 **원문 핵심 문장 (편집 없음):**")
-        raw_sentences = [s.strip() for s in article_info["기사내용"].replace("!", ".").replace("?", ".").split(".") if len(s.strip()) > 8]
-        for i, sent in enumerate(raw_sentences[:3]): st.write(f"{i+1}. {sent}.")
-
-with bottom_col2:
-    st.subheader("📁 대시보드 스크랩 및 노션 더블 백업")
-    st.write("인사이트를 기록하고 저장하면 대시보드 화면에 실시간 유지되며, 개인 노션에도 안전하게 백업본이 전송됩니다.")
-
-    if not filtered_df.empty:
-        st.text_input("📌 스크랩 대상 기사", value=selected_title, disabled=True)
-        scrap_insight = st.text_area("📝 오늘의 상품기획 / 영업관리 인사이트 기록", placeholder="여기에 적은 내용이 대시보드 표와 노션에 동시에 저장됩니다.")
-        
-        if st.button("💾 대시보드 저장 및 노션 백업 전송"):
-            if scrap_insight:
-                is_duplicate = any(
+selected_category = st.sidebar.multiselect("🔍 보험 상품 필터", options=list(df["카테고리(상품)"].unique())

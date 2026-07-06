@@ -184,11 +184,9 @@ with bottom_col2:
                         "나의 인사이트 (더블클릭하여 수정 가능)": scrap_insight
                     }
                     
-                    # 1. 대시보드 로컬 파일 시스템(CSV)에 1차 영구 저장 -> 화면 노출용
                     st.session_state["scrap_storage"].append(new_scrap)
                     save_scraps(st.session_state["scrap_storage"])
                     
-                    # 2. 노션 클라우드로 2차 안전 백업 전송
                     if NOTION_TOKEN and NOTION_DATABASE_ID:
                         notion_url = "https://api.notion.com/v1/pages"
                         headers = {
@@ -224,17 +222,57 @@ with bottom_col2:
         st.markdown("📂 **나의 누적 스크랩 내역 (대시보드 상시 노출 중)**")
         
         scrap_df = pd.DataFrame(st.session_state["scrap_storage"])
+        
+        # 🔗 [기능 추가] 기존 대시보드 데이터를 노션으로 전부 한 번에 쏴주는 일괄 동기화 엔진
+        if NOTION_TOKEN and NOTION_DATABASE_ID:
+            if st.button("🚀 현재 대시보드 내역 노션으로 일괄 전송 (연동하기)"):
+                notion_url = "https://api.notion.com/v1/pages"
+                headers = {
+                    "Authorization": f"Bearer {NOTION_TOKEN.strip()}",
+                    "Content-Type": "application/json",
+                    "Notion-Version": "2022-06-28"
+                }
+                success_count = 0
+                
+                with st.spinner("과거 대시보드 스크랩 자산을 노션 클라우드로 안전하게 이전 중..."):
+                    for item in st.session_state["scrap_storage"]:
+                        # 링크 유무에 따라 포맷 대응
+                        lnk = item.get('기사링크', 'https://news.naver.com')
+                        ins = item.get('나의 인사이트 (더블클릭하여 수정 가능)', item.get('나의 인사이트', ''))
+                        dt = item.get('일자', datetime.now().strftime("%Y-%m-%d"))
+                        
+                        payload = {
+                            "parent": {"database_id": NOTION_DATABASE_ID.strip()},
+                            "properties": {
+                                "기사제목": {"title": [{"text": {"content": f"{item['기사제목']} ({lnk})"}}]},
+                                "일자": {"rich_text": [{"text": {"content": str(dt)}}]},
+                                "나의 인사이트": {"rich_text": [{"text": {"content": str(ins)}}]}
+                            }
+                        }
+                        res = requests.post(notion_url, json=payload, headers=headers)
+                        if res.status_code == 200:
+                            success_count += 1
+                
+                if success_count > 0:
+                    st.success(f"🎉 이전 완료! 기존 스크랩 중 {success_count}개의 데이터가 노션 표로 완벽하게 전송되었습니다!")
+                else:
+                    st.error("❌ 노션 일괄 전송 실패. 노션 '연결 추가' 권한 설정을 다시 한번 확인해 주세요.")
+        
+        # 컬럼 키 안전 보장용 매핑 조정
+        display_df = scrap_df.copy()
+        if "나의 인사이트" in display_df.columns and "나의 인사이트 (더블클릭하여 수정 가능)" not in display_df.columns:
+            display_df["나의 인사이트 (더블클릭하여 수정 가능)"] = display_df["나의 인사이트"]
+            
         edited_df = st.data_editor(
-            scrap_df[["일자", "기사제목", "기사링크", "나의 인사이트 (더블클릭하여 수정 가능)"]],
+            display_df[["일자", "기사제목", "기사링크", "나의 인사이트 (더블클릭하여 수정 가능)"]],
             column_config={
                 "기사링크": st.column_config.LinkColumn("원문 링크", display_text="🔗 이동하기"),
                 "일자": st.column_config.TextColumn("일자", disabled=True),
                 "기사제목": st.column_config.TextColumn("기사제목", disabled=True)
             },
-            use_container_width=True, hide_index=True, key="dashboard_sync_editor"
+            use_container_width=True, hide_index=True, key="dashboard_sync_editor_v2"
         )
         
-        # 화면 표에서 더블클릭해서 수정한 내용 파일에 자동 갱신
         updated_data = edited_df.to_dict(orient="records")
         if updated_data != st.session_state["scrap_storage"]:
             st.session_state["scrap_storage"] = updated_data

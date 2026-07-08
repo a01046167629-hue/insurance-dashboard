@@ -12,6 +12,8 @@ from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 # ==========================================
 # 🔐 자격 증명 (Secrets 설정 자동 연동)
@@ -28,7 +30,27 @@ st.set_page_config(
     layout="wide"
 )
 
-# 💡 매주 월요일마다 데이터를 새로 고치는 핵심 로직
+# 🎯 온라인에서 나눔고딕 폰트를 실시간으로 다운로드하여 등록 (한글 깨짐 방지)
+@st.cache_resource
+def init_korean_font():
+    font_url = "https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Regular.ttf"
+    font_bold_url = "https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Bold.ttf"
+    
+    try:
+        r = requests.get(font_url, timeout=10)
+        pdfmetrics.registerFont(TTFont('NanumGothic', io.BytesIO(r.content)))
+        
+        rb = requests.get(font_bold_url, timeout=10)
+        pdfmetrics.registerFont(TTFont('NanumGothic-Bold', io.BytesIO(rb.content)))
+        return True
+    except Exception as e:
+        st.sidebar.warning(f"⚠️ 한글 폰트 로드 실패(기본 서체 우회): {e}")
+        return False
+
+# 폰트 초기화 실행
+has_korean_font = init_korean_font()
+
+# 💡 매주 월요일마다 데이터를 새로 고치는 핵심 뉴스 로직
 @st.cache_data(ttl=timedelta(days=7))
 def fetch_real_naver_news():
     categories = ["손해보험", "생명보험", "실손보험", "자동차보험", "펫보험"]
@@ -69,10 +91,17 @@ def fetch_real_naver_news():
                         mentioned_company = comp
                         break
                 
-                keywords_pool = ["상생금융", "실적개선", "디지털전환", "보험료 인상", "보험료 인하", "신상품", "고령화", "비급여 과잉", "수가", "제3보험", "4세대 실손", "청구 간소화", "자율주행", "반려동물"]
+                # 🎯 [핵심 패치] 기존 키워드에 ga, 설계사, ifrs17, csm 4개 추가 완료 (총 21개)
+                keywords_pool = [
+                    "실적", "디지털", "ax", "보험료", "신상품", "고령화", 
+                    "비급여 과잉", "제3보험", "실손", "언더라이팅", "손해율", 
+                    "리스크 관리", "수익성", "영업채널", "ai", "심사", "트랜드",
+                    "ga", "설계사", "ifrs17", "csm"
+                ]
                 extracted_kw = "시장 동향 일반"
                 for kw in keywords_pool:
-                    if kw in clean_title or kw in clean_desc:
+                    # 대소문자 구분 없이 영문 매칭을 보장하기 위해 소문자로 변환 매칭
+                    if kw.lower() in clean_title.lower() or kw.lower() in clean_desc.lower():
                         extracted_kw = kw
                         break
 
@@ -98,9 +127,8 @@ def fetch_real_naver_news():
 
 def load_demo_data():
     return pd.DataFrame([
-        {"날짜": "2026-07-06", "카테고리(상품)": "실손보험", "언급보험사": "삼성화재", "핵심키워드": "비급여 과잉", "제목": "실손보험 비급여 지급 체계 개편 논의 본격화", "기사내용": "비급여 항목 과잉 청구로 인한 요율 조정 지표 분석 결과입니다.", "기사링크": "https://news.naver.com"},
-        {"날짜": "2026-07-05", "카테고리(상품)": "펫보험", "언급보험사": "KB손해보험", "핵심키워드": "수가", "제목": "반려동물 등록제 확대와 펫보험 수가 표준화 동향", "기사내용": "동물병원 진료비 항목 표준화에 따른 신상품 기획 트렌드입니다.", "기사링크": "https://news.naver.com"},
-        {"날짜": "2026-07-04", "카테고리(상품)": "자동차보험", "언급보험사": "현대해상", "핵심키워드": "자율주행", "제목": "레벨3 자율주행 상용화에 따른 자동차보험 약관 정비", "기사내용": "자율주행 차량 사고 시 책임 소재 분담และ 상품 보장 범위 설계안입니다.", "기사링크": "https://news.naver.com"}
+        {"날짜": "2026-07-06", "카테고리(상품)": "제3보험", "언급보험사", "삼성생명", "핵심키워드": "csm", "제목": "IFRS17 안정화 단계 속 제3보험 신계약 CSM 확보 총력전", "기사내용": "주요 보험사들이 수익성 및 CSM(계약서비스마진) 극대화를 위해 GA 채널 및 전속 설계사 지원 체계를 대폭 강화하고 있습니다.", "기사링크": "https://news.naver.com"},
+        {"날짜": "2026-07-05", "카테고리(상품)": "실손보험", "언급보험사": "삼성화재", "핵심키워드": "ifrs17", "제목": "실손보험 손해율 관리가 IFRS17 실적 향방 가른다", "기as내용": "비급여 심사 모듈 고도화 및 철저한 언더라이팅 관리를 통한 리스크 스크리닝이 핵심 당면 과제로 부각되었습니다.", "기사링크": "https://news.naver.com"}
     ])
 
 df = fetch_real_naver_news()
@@ -125,65 +153,68 @@ if "scrap_storage" not in st.session_state:
     st.session_state["scrap_storage"] = load_scraps()
 
 # ==========================================
-# 📄 [안전 보완 버전] PDF 월간 리포트 자동 생성 빌더
+# 📄 [완벽 한글화 버전] PDF 월간 리포트 생성 빌더
 # ==========================================
 def generate_pdf_report(source_df):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
     story = []
     
-    # 🎯 [핵심 패치] 폰트 매핑 에러 해결을 위해 헬베티카 기본 서체 구조 베이스로 완전 안전하게 전환
+    font_name = 'NanumGothic' if has_korean_font else 'Helvetica'
+    font_bold_name = 'NanumGothic-Bold' if has_korean_font else 'Helvetica-Bold'
+    
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle('PDFTitle', parent=styles['Heading1'], fontName='Helvetica-Bold', fontSize=20, textColor=colors.HexColor('#1A365D'), spaceAfter=20, alignment=1)
-    h2_style = ParagraphStyle('PDFH2', parent=styles['Heading2'], fontName='Helvetica-Bold', fontSize=14, textColor=colors.HexColor('#2B6CB0'), spaceBefore=15, spaceAfter=8)
-    body_style = ParagraphStyle('PDFBody', parent=styles['Normal'], fontName='Helvetica', fontSize=10, leading=16, spaceAfter=6)
+    title_style = ParagraphStyle('PDFTitle', parent=styles['Heading1'], fontName=font_bold_name, fontSize=20, textColor=colors.HexColor('#1A365D'), spaceAfter=20, alignment=1)
+    h2_style = ParagraphStyle('PDFH2', parent=styles['Heading2'], fontName=font_bold_name, fontSize=14, textColor=colors.HexColor('#2B6CB0'), spaceBefore=15, spaceAfter=8)
+    body_style = ParagraphStyle('PDFBody', parent=styles['Normal'], fontName=font_name, fontSize=10, leading=16, spaceAfter=6)
     bullet_style = ParagraphStyle('PDFBullet', parent=body_style, leftIndent=15, firstLineIndent=-10)
 
     # 1. 타이틀 헤더
-    current_month_str = datetime.now().strftime("%Y-07") # 요구주신 2026년 7월 정적 고정 포맷 반영
-    story.append(Paragraph(f"2026-07 Market Intelligence Trend Report", title_style))
-    story.append(Paragraph(f"Generated Date: {datetime.now().strftime('%Y-%m-%d')} | Source: Real-time Insurance Market Insights", body_style))
+    story.append(Paragraph("📈 2026년 7월 보험시장 트렌드 분석 리포트", title_style))
+    story.append(Paragraph(f"발행일자: {datetime.now().strftime('%Y-%m-%d')} | 데이터 분석 출처: 실시간 마켓 인텔리전스 시스템", body_style))
     story.append(Spacer(1, 15))
     
-    # 데이터 통계 가공
     if not source_df.empty:
         top_keywords = list(source_df['핵심키워드'].value_counts().head(3).index)
         top_company = source_df['언급보험사'].value_counts().index[0]
         if top_company == "기타 업권" and len(source_df['언급보험사'].value_counts()) > 1:
             top_company = source_df['언급보험사'].value_counts().index[1]
     else:
-        top_keywords = ["실손보험", "자동차보험", "펫보험"]
-        top_company = "KB손해보험"
+        top_keywords = ["csm", "ga", "ifrs17"]
+        top_company = "삼성생명"
 
-    # 2. 이번 달 TOP 키워드 상품군 (에러 방지를 위해 특수 기호 마스킹 해제)
-    story.append(Paragraph("1. Monthly TOP Business Keywords", h2_style))
-    story.append(Paragraph(f"- Top 1 Issue: {top_keywords[0] if len(top_keywords) > 0 else '실손보험'}", bullet_style))
-    story.append(Paragraph(f"- Top 2 Issue: {top_keywords[1] if len(top_keywords) > 1 else '자동차보험'}", bullet_style))
-    story.append(Paragraph(f"- Top 3 Issue: {top_keywords[2] if len(top_keywords) > 2 else '펫보험'}", bullet_style))
+    # 2. 이번 달 TOP 키워드
+    story.append(Paragraph("1. 이번 달 TOP 키워드", h2_style))
+    for kw in top_keywords[:3]:
+        story.append(Paragraph(f"• {kw.upper()}", bullet_style))
+    if len(top_keywords) < 3:
+        for extra in ["csm", "ga", "ifrs17"][len(top_keywords):]:
+            story.append(Paragraph(f"• {extra.upper()}", bullet_style))
     
     # 3. 가장 많이 언급된 보험사
-    story.append(Paragraph("2. Most Mentioned Company", h2_style))
-    story.append(Paragraph(f"Market Leader Trend Target: {top_company}", body_style))
+    story.append(Paragraph("2. 가장 많이 언급된 보험사", h2_style))
+    story.append(Paragraph(f"이번 달 시장 모니터링 분석 지표 상에서 미디어와 시장의 주목을 가장 많이 받은 리딩 보험사는 **{top_company}** 입니다. 해당 보험사는 관련 카테고리 내 상품 다변화 및 전략적 담보 노출에 집중하고 있습니다.", body_style))
 
-    # 4. 주요 이슈 요약 텍스트화 (테이블 폰트 에러 완벽 차단)
-    story.append(Paragraph("3. Core Market Issues Summary", h2_style))
-    story.append(Paragraph("• Non-benefit claims and policy standard enforcement trends are actively discussed in the medical indemnity lines.", bullet_style))
-    story.append(Paragraph("• Pet insurance rate standardization models are emerging with brand new coverage updates.", bullet_style))
-    story.append(Paragraph("• Level 3 autonomous vehicle liability split clauses are re-shaping private auto insurance models.", bullet_style))
+    # 4. 주요 이슈 요약
+    story.append(Paragraph("3. 주요 이슈 요약", h2_style))
+    story.append(Paragraph("• **IFRS17 기반 CSM 손익 관리 고도화:** 보험계약서비스마진(CSM)의 안정적 상각과 손해율 방어를 위해 장기 보장성 보험 중심의 전략적 포트폴리오 믹스가 한층 강화되고 있습니다.", bullet_style))
+    story.append(Paragraph("• **GA 채널 위상 제고 및 설계사 가동률 강화:** 판매 다각화를 위해 제3보험 시장 내 GA 소속 설계사들을 향한 수수료 체계 정비와 전용 가이드라인 배포가 활발하게 전개 중입니다.", bullet_style))
+    story.append(Paragraph("• **언더라이팅 및 정밀 심사 리스크 모니터링:** 수익성 중심의 견고한 성장을 지속하고자 고위험 비급여 담보에 대한 사전 심사 스크리닝 시스템 배치가 활성화되는 추세입니다.", bullet_style))
 
-    # 5. 전략 시사점 (디벨롭 세부 전략 분석 리포트)
-    story.append(Paragraph("4. Consumer Market Impact Analysis", h2_style))
-    story.append(Paragraph("Price sensitivity is balanced out by clear custom benefits. Consumers are highly reacting to specialized riders like autonomous driving coverage or fast digital medical claim services rather than minor premium discount promotions.", body_style))
+    # 5. 소비자에게 미치는 영향
+    story.append(Paragraph("4. 소비자에게 미치는 영향", h2_style))
+    story.append(Paragraph("보험사들의 CSM 확보 전략에 따라 보장 범위가 다각화된 고품질의 신상품 선택지가 넓어지고 있습니다. 아울러 대형 GA 및 전문 설계사 채널의 컨설팅 역량이 고도화됨에 따라 단순 지인 영업 위주의 가입 형태에서 벗어나 객관적인 담보 비교 및 보장 분석 서비스를 체감하는 소비자가 확대되고 있습니다.", body_style))
 
-    story.append(Paragraph("5. Sales Channel Strategy (Sales Insight)", h2_style))
-    story.append(Paragraph("- Move away from fear-based marketing. Use regulatory and policy changes as organic, sophisticated customer consulting touchpoints.", bullet_style))
-    story.append(Paragraph("- Deliver hyper-personalized pitch books linking pet registration rate updates to long-term coverage stability for pet owners.", bullet_style))
+    # 6. 영업 시사점 (Sales Insight)
+    story.append(Paragraph("5. 영업 시사점 (Sales Insight)", h2_style))
+    story.append(Paragraph("• **GA 채널 소통 체계 혁신:** 전속 채널 외에도 대형 GA 설계사 접점 마케팅의 중요성이 급증함에 따라, 자사 상품의 특장점을 직관적으로 비교할 수 있는 원페이지 셀링 포인트를 제공하여 현장 가동률을 극대화해야 합니다.", bullet_style))
+    story.append(Paragraph("• **지표 연계 스토리텔링 화법:** 소비자에게 단순 상품 안내를 넘어, 안정적인 위험 보장 여력을 증명하는 채널 신뢰도를 기반으로 롱텀 케어 담보의 메리트를 소구하는 세련된 상담 프로세스 구축이 필요합니다.", bullet_style))
 
-    story.append(Paragraph("6. Product Development & RM Strategy (Product Strategy)", h2_style))
-    story.append(Paragraph("- Proactively develop premium risk tables reflecting emerging technologies like Level 3 automated driving liability splits to capture market share.", bullet_style))
-    story.append(Paragraph("- Strengthen underwriting models via automated fraud-detection analytics modules and distinct rider-splitting structures.", bullet_style))
+    # 7. 상품기획 시사점 (Product Strategy)
+    story.append(Paragraph("6. 상품기획 시사점 (Product Strategy)", h2_style))
+    story.append(Paragraph("• **CSM 친화적 고수익 제3보험 라인업 강화:** IFRS17 하에서 안정적인 마진율을 방어할 수 있도록 고령화 트렌드 및 헬스케어 테크를 결합한 고효율 보장성 특약 개발에 전사적 역량을 집중해야 합니다.", bullet_style))
+    story.append(Paragraph("• **AI 기반 UWD와 클레임 RM 정밀화:** 영업채널 경쟁 심화 속에서 우량 고객 유치 및 건전성 확보를 위해 디지털 인수심사(Underwriting) 로직을 정교화하고, 손해율을 실시간 방어할 수 있는 계리 리스크 가이드라인 수립을 제안합니다.", bullet_style))
 
-    # PDF 빌드 실행
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
@@ -193,28 +224,25 @@ def generate_pdf_report(source_df):
 st.title("📊 AI 기반 보험 트렌드 분석 및 상품 개선 제안 플랫폼")
 st.caption(f"🔄 매주 월요일 정기 자동 업데이트 시스템 연동 완료 (최근 갱신일: {datetime.now().strftime('%Y-%m-%d')})")
 
-# 사이드바 필터 시스템
 selected_category = st.sidebar.multiselect("🔍 보험 상품 필터", options=list(df["카테고리(상품)"].unique()) if not df.empty else ["펫보험"], default=list(df["카테고리(상품)"].unique()) if not df.empty else ["펫보험"])
 filtered_df = df[df["카테고리(상품)"].isin(selected_category)] if not df.empty else df
 
-# 📄 사이드바 최상단 리포트 출력 구역
 st.sidebar.markdown("---")
-st.sidebar.subheader("📥 Executive Report")
+st.sidebar.subheader("📥 월간 경영 리포트")
 with st.sidebar:
     try:
         pdf_data = generate_pdf_report(filtered_df)
         st.download_button(
             label="📄 2026년 7월 보험 리포트 PDF 다운로드",
             data=pdf_data,
-            file_name=f"Insurance_Market_Trend_Report_{datetime.now().strftime('%Y%m%d')}.pdf",
+            file_name=f"보험시장_트렌드_리포트_{datetime.now().strftime('%Y%m%d')}.pdf",
             mime="application/pdf",
             use_container_width=True
         )
     except Exception as pdf_err:
-        st.error("리포트 빌드 대기 중입니다.")
+        st.error(f"리포트 빌드 대기 중: {pdf_err}")
 st.sidebar.markdown("---")
 
-# 주요 지표 (Metric)
 col1, col2, col3 = st.columns(3)
 with col1: st.metric("📋 주간 정밀 수집 뉴스", f"{len(filtered_df)} 건 / 100 건")
 with col2: st.metric("🎯 최다 발생 비즈니스 이슈", filtered_df["핵심키워드"].value_counts().index[0] if not filtered_df.empty else "-")
@@ -222,7 +250,6 @@ with col3: st.metric("🔥 트렌드 집중 상품군", filtered_df["카테고�
 
 st.markdown("---")
 
-# 1. 트렌드 이슈 분석 매트릭스
 if not filtered_df.empty:
     pivot_df = filtered_df.groupby(["핵심키워드", "카테고리(상품)"]).size().reset_index(name="기사수")
     fig_heatmap = px.density_heatmap(pivot_df, x="카테고리(상품)", y="핵심키워드", z="기사수", text_auto=True, color_continuous_scale="Purples")
@@ -230,7 +257,6 @@ if not filtered_df.empty:
 
 st.markdown("---")
 
-# 2. 3문장 주제 요약 & 데일리 인사이트 스크랩북 (2단 구성)
 bottom_col1, bottom_col2 = st.columns(2)
 
 with bottom_col1:
@@ -301,7 +327,6 @@ with bottom_col2:
             else:
                 st.error("⚠️ 인사이트 내용을 입력해 주셔야 저장이 가능합니다.")
     
-    # 📺 대시보드 화면에 과거 스크랩 목록 실시간 시각화 표 출력 영역
     if st.session_state["scrap_storage"]:
         st.markdown("---")
         st.markdown("📂 **나의 누적 스크랩 내역 (대시보드 상시 노출 중)**")
@@ -352,7 +377,7 @@ with bottom_col2:
                 "일자": st.column_config.TextColumn("일자", disabled=True),
                 "기사제목": st.column_config.TextColumn("기사제목", disabled=True)
             },
-            use_container_width=True, hide_index=True, key="dashboard_sync_editor_v4"
+            use_container_width=True, hide_index=True, key="dashboard_sync_editor_v8"
         )
         
         updated_data = edited_df.to_dict(orient="records")

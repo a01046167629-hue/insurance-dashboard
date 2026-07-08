@@ -91,7 +91,6 @@ def fetch_real_naver_news():
                         mentioned_company = comp
                         break
                 
-                # 🎯 [핵심 패치] 기존 키워드에 ga, 설계사, ifrs17, csm 4개 추가 완료 (총 21개)
                 keywords_pool = [
                     "실적", "디지털", "ax", "보험료", "신상품", "고령화", 
                     "비급여 과잉", "제3보험", "실손", "언더라이팅", "손해율", 
@@ -100,7 +99,6 @@ def fetch_real_naver_news():
                 ]
                 extracted_kw = "시장 동향 일반"
                 for kw in keywords_pool:
-                    # 대소문자 구분 없이 영문 매칭을 보장하기 위해 소문자로 변환 매칭
                     if kw.lower() in clean_title.lower() or kw.lower() in clean_desc.lower():
                         extracted_kw = kw
                         break
@@ -126,9 +124,10 @@ def fetch_real_naver_news():
     return final_df
 
 def load_demo_data():
+    # 🎯 [오타 수정 완료] "언급보험사", "삼성생명" 구조를 콜론(:) 구조로 완벽하게 복구했습니다.
     return pd.DataFrame([
-        {"날짜": "2026-07-06", "카테고리(상품)": "제3보험", "언급보험사", "삼성생명", "핵심키워드": "csm", "제목": "IFRS17 안정화 단계 속 제3보험 신계약 CSM 확보 총력전", "기사내용": "주요 보험사들이 수익성 및 CSM(계약서비스마진) 극대화를 위해 GA 채널 및 전속 설계사 지원 체계를 대폭 강화하고 있습니다.", "기사링크": "https://news.naver.com"},
-        {"날짜": "2026-07-05", "카테고리(상품)": "실손보험", "언급보험사": "삼성화재", "핵심키워드": "ifrs17", "제목": "실손보험 손해율 관리가 IFRS17 실적 향방 가른다", "기as내용": "비급여 심사 모듈 고도화 및 철저한 언더라이팅 관리를 통한 리스크 스크리닝이 핵심 당면 과제로 부각되었습니다.", "기사링크": "https://news.naver.com"}
+        {"날짜": "2026-07-06", "카테고리(상품)": "제3보험", "언급보험사": "삼성생명", "핵심키워드": "csm", "제목": "IFRS17 안정화 단계 속 제3보험 신계약 CSM 확보 총력전", "기사내용": "주요 보험사들이 수익성 및 CSM(계약서비스마진) 극대화를 위해 GA 채널 및 전속 설계사 지원 체계를 대폭 강화하고 있습니다.", "기사링크": "https://news.naver.com"},
+        {"날짜": "2026-07-05", "카테고리(상품)": "실손보험", "언급보험사": "삼성화재", "핵심키워드": "ifrs17", "제목": "실손보험 손해율 관리가 IFRS17 실적 향방 가른다", "기사내용": "비급여 심사 모듈 고도화 및 철저한 언더라이팅 관리를 통한 리스크 스크리닝이 핵심 당면 과제로 부각되었습니다.", "기사링크": "https://news.naver.com"}
     ])
 
 df = fetch_real_naver_news()
@@ -377,7 +376,7 @@ with bottom_col2:
                 "일자": st.column_config.TextColumn("일자", disabled=True),
                 "기사제목": st.column_config.TextColumn("기사제목", disabled=True)
             },
-            use_container_width=True, hide_index=True, key="dashboard_sync_editor_v8"
+            use_container_width=True, hide_index=True, key="dashboard_sync_editor_v9"
         )
         
         updated_data = edited_df.to_dict(orient="records")

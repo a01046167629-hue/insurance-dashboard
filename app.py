@@ -53,6 +53,7 @@ has_korean_font = init_korean_font()
 # 💡 매주 월요일마다 데이터를 새로 고치는 핵심 뉴스 로직
 @st.cache_data(ttl=timedelta(days=7))
 def fetch_real_naver_news():
+    # 🎯 [한국보험신문 확장] 일반 상품군 검색어 조합 설정
     categories = ["손해보험", "생명보험", "실손보험", "자동차보험", "펫보험"]
     all_news = []
     
@@ -64,20 +65,28 @@ def fetch_real_naver_news():
         "X-Naver-Client-Secret": NAVER_CLIENT_SECRET.strip()
     }
 
-    # 중복 기사 필터링용 셋(Set) 구축
     seen_titles = set()
     seen_descs = set()
 
-    # 🚫 [키워드 반영] "개최" 단어를 블랙리스트에 추가하여 단순 단순 행사성 뉴스 차단 (총 16개)
     promo_blacklist = [
         "이벤트", "출시기념", "선착순", "증정이벤트", "고객감사", 
         "공식 sns", "기프티콘", "사은품", "팝업스토어", "업무협약", 
         "mou", "캠페인", "후원금", "보도자료", "공모전", "개최"
     ]
 
+    # 1. 기존 일반 상품군별 검색 쿼리 빌드 프로세스 수행
+    search_queries = []
     for cat in categories:
-        encoded_query = urllib.parse.quote(f"{cat} 보험 트렌드")
-        url = f"https://openapi.naver.com/v1/search/news.json?query={encoded_query}&display=50&sort=sim"
+        search_queries.append((cat, f"{cat} 보험 트렌드"))
+        
+    # 🎯 [핵심 로직 추가] 한국보험신문 전문 뉴스 쿼리(출처 지정형) 결합 타겟팅
+    search_queries.append(("한국보험신문(전문지)", '"한국보험신문"'))
+
+    for cat_label, q_text in search_queries:
+        encoded_query = urllib.parse.quote(q_text)
+        # 한국보험신문 전용 쿼리는 전문성을 위해 상위 100개까지 확장 수집
+        display_count = "100" if cat_label == "한국보험신문(전문지)" else "50"
+        url = f"https://openapi.naver.com/v1/search/news.json?query={encoded_query}&display={display_count}&sort=sim"
         
         try:
             response = requests.get(url, headers=headers)
@@ -94,6 +103,11 @@ def fetch_real_naver_news():
                 
                 clean_title = item["title"].replace("<b>", "").replace("</b>", "").replace("&quot;", '"').replace("&amp;", "&")
                 clean_desc = item["description"].replace("<b>", "").replace("</b>", "").replace("&quot;", '"').replace("&amp;", "&")
+                
+                # 한국보험신문 출처 검증 또는 언론사 유효성 더블 체크
+                if cat_label == "한국보험신문(전문지)":
+                    if "한국보험신문" not in clean_title and "한국보험신문" not in clean_desc and "insweek" not in item["link"]:
+                        continue
                 
                 # 🚫 [필터 1] 홍보성/보도자료 블랙리스트 단어 필터링
                 is_promo = False
@@ -129,10 +143,14 @@ def fetch_real_naver_news():
                         extracted_kw = kw
                         break
 
-                if extracted_kw != "시장 동향 일반":
+                # 한국보험신문 기사라면 일반 시장동향이라도 가치가 높으므로 키워드 미검출 시에도 기본 노출 지원
+                if extracted_kw != "시장 동향 일반" or cat_label == "한국보험신문(전문지)":
+                    if extracted_kw == "시장 동향 일반" and cat_label == "한국보험신문(전문지)":
+                        extracted_kw = "전문지 종합 동향"
+                        
                     all_news.append({
                         "날짜": formatted_date,
-                        "카테고리(상품)": cat,
+                        "카테고리(상품)": cat_label,
                         "언급보험사": mentioned_company,
                         "핵심키워드": extracted_kw,
                         "제목": clean_title,
@@ -146,14 +164,15 @@ def fetch_real_naver_news():
             
     final_df = pd.DataFrame(all_news)
     if not final_df.empty:
-        final_df = final_df.head(100)
+        # 전문 기사가 확보되었으므로 최신 정렬 후 가용 지표 확보
+        final_df = final_df.sort_values(by="날짜", ascending=False).head(120)
     else:
         final_df = load_demo_data()
     return final_df
 
 def load_demo_data():
     return pd.DataFrame([
-        {"날짜": "2026-07-06", "카테고리(상품)": "제3보험", "언급보험사": "삼성생명", "핵심키워드": "csm", "제목": "IFRS17 안정화 단계 속 제3보험 신계약 CSM 확보 총력전", "기사내용": "주요 보험사들이 수익성 및 CSM(계약서비스마진) 극대화를 위해 GA 채널 및 전속 설계사 지원 체계를 대폭 강화하고 있습니다.", "기사링크": "https://news.naver.com"},
+        {"날짜": "2026-07-06", "카테고리(상품)": "한국보험신문(전문지)", "언급보험사": "삼성생명", "핵심키워드": "csm", "제목": "[한국보험신문] IFRS17 안정화 단계 속 제3보험 신계약 CSM 확보 총력전", "기사내용": "주요 보험사들이 수익성 및 CSM(계약서비스마진) 극대화를 위해 GA 채널 및 전속 설계사 지원 체계를 대폭 강화하고 있습니다.", "기사링크": "https://news.naver.com"},
         {"날짜": "2026-07-05", "카테고리(상품)": "실손보험", "언급보험사": "삼성화재", "핵심키워드": "ifrs17", "제목": "실손보험 손해율 관리가 IFRS17 실적 향방 가른다", "기사내용": "비급여 심사 모듈 고도화 및 철저한 언더라이팅 관리를 통한 리스크 스크리닝이 핵심 당면 과제로 부각되었습니다.", "기사링크": "https://news.naver.com"}
     ])
 
@@ -270,7 +289,7 @@ with st.sidebar:
 st.sidebar.markdown("---")
 
 col1, col2, col3 = st.columns(3)
-with col1: st.metric("📋 주간 정밀 수집 뉴스", f"{len(filtered_df)} 건 / 100 건")
+with col1: st.metric("📋 주간 정밀 수집 뉴스", f"{len(filtered_df)} 건 / 120 건")
 with col2: st.metric("🎯 최다 발생 비즈니스 이슈", filtered_df["핵심키워드"].value_counts().index[0] if not filtered_df.empty else "-")
 with col3: st.metric("🔥 트렌드 집중 상품군", filtered_df["카테고리(상품)"].value_counts().index[0] if not filtered_df.empty else "-")
 
@@ -403,7 +422,7 @@ with bottom_col2:
                 "일자": st.column_config.TextColumn("일자", disabled=True),
                 "기사제목": st.column_config.TextColumn("기사제목", disabled=True)
             },
-            use_container_width=True, hide_index=True, key="dashboard_sync_editor_v11"
+            use_container_width=True, hide_index=True, key="dashboard_sync_editor_v12"
         )
         
         updated_data = edited_df.to_dict(orient="records")

@@ -64,6 +64,17 @@ def fetch_real_naver_news():
         "X-Naver-Client-Secret": NAVER_CLIENT_SECRET.strip()
     }
 
+    # 중복 기사 필터링용 셋(Set) 구축
+    seen_titles = set()
+    seen_descs = set()
+
+    # 🚫 [키워드 반영] "개최" 단어를 블랙리스트에 추가하여 단순 단순 행사성 뉴스 차단 (총 16개)
+    promo_blacklist = [
+        "이벤트", "출시기념", "선착순", "증정이벤트", "고객감사", 
+        "공식 sns", "기프티콘", "사은품", "팝업스토어", "업무협약", 
+        "mou", "캠페인", "후원금", "보도자료", "공모전", "개최"
+    ]
+
     for cat in categories:
         encoded_query = urllib.parse.quote(f"{cat} 보험 트렌드")
         url = f"https://openapi.naver.com/v1/search/news.json?query={encoded_query}&display=50&sort=sim"
@@ -81,8 +92,23 @@ def fetch_real_naver_news():
                 except:
                     formatted_date = datetime.now().strftime("%Y-%m-%d")
                 
-                clean_title = item["title"].replace("<b>", "").replace("</b>", "").replace("&quot;", '"')
-                clean_desc = item["description"].replace("<b>", "").replace("</b>", "").replace("&quot;", '"')
+                clean_title = item["title"].replace("<b>", "").replace("</b>", "").replace("&quot;", '"').replace("&amp;", "&")
+                clean_desc = item["description"].replace("<b>", "").replace("</b>", "").replace("&quot;", '"').replace("&amp;", "&")
+                
+                # 🚫 [필터 1] 홍보성/보도자료 블랙리스트 단어 필터링
+                is_promo = False
+                for black_word in promo_blacklist:
+                    if black_word in clean_title.lower():
+                        is_promo = True
+                        break
+                if is_promo: continue
+
+                # 🚫 [필터 2] 중복 기사 도배 방지 (앞 글자 및 디스크립션 기반 유사도 차단)
+                title_fingerprint = clean_title[:12].strip()
+                desc_fingerprint = clean_desc[:20].strip()
+                
+                if title_fingerprint in seen_titles or desc_fingerprint in seen_descs:
+                    continue
                 
                 companies = ["삼성화재", "현대해상", "DB손해보험", "KB손해보험", "삼성생명", "한화생명", "교보생명"]
                 mentioned_company = "기타 업권"
@@ -113,6 +139,8 @@ def fetch_real_naver_news():
                         "기사내용": clean_desc,
                         "기사링크": item["link"]
                     })
+                    seen_titles.add(title_fingerprint)
+                    seen_descs.add(desc_fingerprint)
         except:
             pass
             
@@ -124,7 +152,6 @@ def fetch_real_naver_news():
     return final_df
 
 def load_demo_data():
-    # 🎯 [오타 수정 완료] "언급보험사", "삼성생명" 구조를 콜론(:) 구조로 완벽하게 복구했습니다.
     return pd.DataFrame([
         {"날짜": "2026-07-06", "카테고리(상품)": "제3보험", "언급보험사": "삼성생명", "핵심키워드": "csm", "제목": "IFRS17 안정화 단계 속 제3보험 신계약 CSM 확보 총력전", "기사내용": "주요 보험사들이 수익성 및 CSM(계약서비스마진) 극대화를 위해 GA 채널 및 전속 설계사 지원 체계를 대폭 강화하고 있습니다.", "기사링크": "https://news.naver.com"},
         {"날짜": "2026-07-05", "카테고리(상품)": "실손보험", "언급보험사": "삼성화재", "핵심키워드": "ifrs17", "제목": "실손보험 손해율 관리가 IFRS17 실적 향방 가른다", "기사내용": "비급여 심사 모듈 고도화 및 철저한 언더라이팅 관리를 통한 리스크 스크리닝이 핵심 당면 과제로 부각되었습니다.", "기사링크": "https://news.naver.com"}
@@ -376,7 +403,7 @@ with bottom_col2:
                 "일자": st.column_config.TextColumn("일자", disabled=True),
                 "기사제목": st.column_config.TextColumn("기사제목", disabled=True)
             },
-            use_container_width=True, hide_index=True, key="dashboard_sync_editor_v9"
+            use_container_width=True, hide_index=True, key="dashboard_sync_editor_v11"
         )
         
         updated_data = edited_df.to_dict(orient="records")

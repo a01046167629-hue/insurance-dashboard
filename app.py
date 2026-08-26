@@ -1,6 +1,3 @@
-아래 코드를 `app.py`의 기존 내용 전체를 지우고 그대로 붙여넣으세요.
-
-```python
 import html
 import io
 import json
@@ -684,4 +681,3 @@ if not raw_df.empty:
         use_container_width=True,
         hide_index=True,
     )
-```

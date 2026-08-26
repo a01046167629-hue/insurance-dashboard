@@ -41,8 +41,7 @@ NOTION_DATABASE_ID = str(
 
 NAVER_URL = "https://openapi.naver.com/v1/search/news.json"
 GEMINI_URL = (
-    "https://generativelanguage.googleapis.com/"
-    "v1beta/models/gemini-2.5-flash:generateContent"
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent"
 )
 SCRAP_FILE = "insurance_scraps.csv"
 

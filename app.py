@@ -7,29 +7,20 @@ import os
 import io
 import json
 import re
-
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
+# PDF
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import (
-    SimpleDocTemplate,
-    Paragraph,
-    Spacer,
-    Table,
-    TableStyle
-)
-from reportlab.lib.styles import (
-    getSampleStyleSheet,
-    ParagraphStyle
-)
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
 
 # =========================================================
-# 🔐 1. SECRETS
+# 🔐 SECRETS
 # =========================================================
 
 NAVER_CLIENT_ID = st.secrets.get("NAVER_CLIENT_ID", "")
@@ -40,12 +31,18 @@ NOTION_DATABASE_ID = st.secrets.get("NOTION_DATABASE_ID", "")
 
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "").strip()
 
-# 현재 사용할 Gemini 모델
-GEMINI_MODEL = "gemini-2.5-flash"
+# ⭐ 현재 사용할 Gemini 모델
+GEMINI_MODEL = "gemini-3.6-flash"
+
+# Gemini REST API URL
+GEMINI_API_URL = (
+    f"https://generativelanguage.googleapis.com/v1beta/"
+    f"models/{GEMINI_MODEL}:generateContent"
+)
 
 
 # =========================================================
-# ⚙️ 2. PAGE CONFIG
+# ⚙️ PAGE CONFIG
 # =========================================================
 
 st.set_page_config(
@@ -56,7 +53,7 @@ st.set_page_config(
 
 
 # =========================================================
-# 🔤 3. 한글 PDF 폰트
+# 🇰🇷 한글 폰트
 # =========================================================
 
 @st.cache_resource
@@ -75,21 +72,17 @@ def init_korean_font():
     try:
 
         r = requests.get(font_url, timeout=10)
+        r.raise_for_status()
 
         pdfmetrics.registerFont(
-            TTFont(
-                "NanumGothic",
-                io.BytesIO(r.content)
-            )
+            TTFont("NanumGothic", io.BytesIO(r.content))
         )
 
         rb = requests.get(font_bold_url, timeout=10)
+        rb.raise_for_status()
 
         pdfmetrics.registerFont(
-            TTFont(
-                "NanumGothic-Bold",
-                io.BytesIO(rb.content)
-            )
+            TTFont("NanumGothic-Bold", io.BytesIO(rb.content))
         )
 
         return True
@@ -107,7 +100,7 @@ has_korean_font = init_korean_font()
 
 
 # =========================================================
-# 📰 4. 검증 언론사
+# 📰 검증 언론사
 # =========================================================
 
 TARGET_PRESS_CONFIG = {
@@ -168,17 +161,14 @@ TARGET_PRESS_CONFIG = {
 
     "연합뉴스": {
         "type": "종합지",
-        "domains": [
-            "yna.co.kr",
-            "yonhapnewstv.co.kr"
-        ],
+        "domains": ["yna.co.kr", "yonhapnewstv.co.kr"],
         "query": '"연합뉴스" 보험'
     }
 }
 
 
 # =========================================================
-# 🔍 5. 중복 제거
+# 🔍 중복 제거
 # =========================================================
 
 def normalize_title(title):
@@ -227,19 +217,16 @@ def is_duplicate_article(
 
 
 # =========================================================
-# 🤖 6. Gemini API 공통 호출 함수
+# 🤖 Gemini 공통 호출 함수
 # =========================================================
 
 def call_gemini(prompt, timeout=30):
 
     if not GEMINI_API_KEY:
 
-        return None, "GEMINI_API_KEY가 없습니다."
-
-    url = (
-        f"https://generativelanguage.googleapis.com/"
-        f"v1beta/models/{GEMINI_MODEL}:generateContent"
-    )
+        raise Exception(
+            "GEMINI_API_KEY가 Streamlit Secrets에 없습니다."
+        )
 
     headers = {
         "Content-Type": "application/json",
@@ -250,6 +237,7 @@ def call_gemini(prompt, timeout=30):
 
         "contents": [
             {
+                "role": "user",
                 "parts": [
                     {
                         "text": prompt
@@ -260,81 +248,339 @@ def call_gemini(prompt, timeout=30):
 
         "generationConfig": {
 
-            "temperature": 0.2,
+            "responseMimeType": "application/json",
 
-            "responseMimeType":
-                "application/json"
+            "maxOutputTokens": 8000
+
         }
     }
 
     try:
 
         response = requests.post(
-            url,
+            GEMINI_API_URL,
             headers=headers,
             json=payload,
             timeout=timeout
         )
 
-        if response.status_code != 200:
+    except requests.exceptions.Timeout:
 
-            return (
-                None,
-                f"HTTP {response.status_code}: "
-                f"{response.text[:1000]}"
+        raise Exception(
+            "Gemini API 요청 시간이 초과되었습니다."
+        )
+
+    except requests.exceptions.RequestException as e:
+
+        raise Exception(
+            f"Gemini 네트워크 오류: {e}"
+        )
+
+    if response.status_code != 200:
+
+        try:
+            error_json = response.json()
+
+            error_message = (
+                error_json
+                .get("error", {})
+                .get("message", response.text)
             )
+
+        except Exception:
+
+            error_message = response.text
+
+        raise Exception(
+            f"HTTP {response.status_code}: {error_message}"
+        )
+
+    try:
 
         data = response.json()
 
-        candidates = data.get(
-            "candidates",
-            []
+        text = (
+            data["candidates"][0]
+            ["content"]
+            ["parts"][0]
+            ["text"]
         )
 
-        if not candidates:
-
-            return (
-                None,
-                "Gemini 응답에 candidates가 없습니다."
-            )
-
-        parts = (
-            candidates[0]
-            .get("content", {})
-            .get("parts", [])
-        )
-
-        if not parts:
-
-            return (
-                None,
-                "Gemini 응답에 text가 없습니다."
-            )
-
-        text = parts[0].get(
-            "text",
-            ""
-        )
-
-        if not text:
-
-            return (
-                None,
-                "Gemini가 빈 응답을 반환했습니다."
-            )
-
-        return text, None
+        return json.loads(text)
 
     except Exception as e:
 
-        return (
-            None,
-            f"{type(e).__name__}: {e}"
+        raise Exception(
+            f"Gemini 응답 JSON 파싱 실패: {e}\n"
+            f"응답: {response.text[:1000]}"
         )
 
 
 # =========================================================
-# 📊 7. Fallback 평가
+# 🤖 기사 중요도 평가
+# =========================================================
+
+def evaluate_articles_batch_with_gemini(
+    articles_list
+):
+
+    if not articles_list:
+
+        return []
+
+    # Gemini 키가 없으면 fallback
+    if not GEMINI_API_KEY:
+
+        return [
+            evaluate_article_fallback(
+                a["기사제목"],
+                a["기사내용"],
+                a["pub_datetime"]
+            )
+            for a in articles_list
+        ]
+
+    prompt_items = []
+
+    for idx, a in enumerate(
+        articles_list,
+        1
+    ):
+
+        prompt_items.append(
+            f"""
+기사 #{idx}
+- 제목: {a['기사제목']}
+- 요약: {a['기사내용']}
+- 언론사: {a['언론사']}
+"""
+        )
+
+    context_str = "\n".join(prompt_items)
+
+    prompt = f"""
+당신은 대한민국 보험산업 수석 이코노미스트입니다.
+
+아래 보험 기사 목록을 분석하여
+각 기사의 중요도를 100점 만점으로 정량 평가하세요.
+
+[기사 목록]
+
+{context_str}
+
+[채점 기준]
+
+1. 산업 영향도 (25점)
+
+- 21~25: 보험산업 구조적 변화
+- 16~20: 다수 보험사에 영향
+- 11~15: 특정 상품/채널 영향
+- 1~10: 제한적 영향
+
+2. 정책/제도 (20점)
+
+- 16~20: 직접적인 제도 변화
+- 11~15: 제도 개편 논의
+- 6~10: 간접 관련
+- 1~5: 관련성 낮음
+
+3. 소비자 영향 (20점)
+
+- 16~20: 대다수 가입자에게 직접 영향
+- 11~15: 특정 소비자 집단
+- 6~10: 간접 영향
+- 1~5: 제한적
+
+4. 시장 영향 (20점)
+
+- 16~20: 시장 경쟁구도/수익성에 큰 영향
+- 11~15: 특정 시장 영향
+- 6~10: 제한적
+- 1~5: 낮음
+
+5. 시의성 (15점)
+
+- 13~15: 진행 중인 매우 중요한 현안
+- 10~12: 최근 중요 이슈
+- 6~9: 일반적인 최근 이슈
+- 1~5: 낮음
+
+반드시 JSON만 반환하세요.
+
+JSON 형식:
+
+{{
+  "evaluations": [
+    {{
+      "index": 1,
+      "industry_score": 0,
+      "policy_score": 0,
+      "consumer_score": 0,
+      "market_score": 0,
+      "timeliness_score": 0,
+      "importance_reason": "점수 산정 근거 2문장"
+    }}
+  ]
+}}
+"""
+
+    try:
+
+        eval_data = call_gemini(
+            prompt,
+            timeout=40
+        )
+
+        evaluations = eval_data.get(
+            "evaluations",
+            []
+        )
+
+        results = []
+
+        for idx, article in enumerate(
+            articles_list,
+            1
+        ):
+
+            matching = next(
+                (
+                    e for e in evaluations
+                    if int(e.get("index", 0)) == idx
+                ),
+                None
+            )
+
+            if matching:
+
+                ind = max(
+                    0,
+                    min(
+                        25,
+                        int(
+                            matching.get(
+                                "industry_score",
+                                10
+                            )
+                        )
+                    )
+                )
+
+                pol = max(
+                    0,
+                    min(
+                        20,
+                        int(
+                            matching.get(
+                                "policy_score",
+                                10
+                            )
+                        )
+                    )
+                )
+
+                con = max(
+                    0,
+                    min(
+                        20,
+                        int(
+                            matching.get(
+                                "consumer_score",
+                                10
+                            )
+                        )
+                    )
+                )
+
+                mkt = max(
+                    0,
+                    min(
+                        20,
+                        int(
+                            matching.get(
+                                "market_score",
+                                10
+                            )
+                        )
+                    )
+                )
+
+                tim = max(
+                    0,
+                    min(
+                        15,
+                        int(
+                            matching.get(
+                                "timeliness_score",
+                                10
+                            )
+                        )
+                    )
+                )
+
+                total = (
+                    ind +
+                    pol +
+                    con +
+                    mkt +
+                    tim
+                )
+
+                results.append({
+
+                    "article_importance_score": total,
+
+                    "industry_score": ind,
+
+                    "policy_score": pol,
+
+                    "consumer_score": con,
+
+                    "market_score": mkt,
+
+                    "timeliness_score": tim,
+
+                    "importance_reason": str(
+                        matching.get(
+                            "importance_reason",
+                            "AI 분석 완료"
+                        )
+                    ),
+
+                    "eval_mode": "AI"
+
+                })
+
+            else:
+
+                results.append(
+                    evaluate_article_fallback(
+                        article["기사제목"],
+                        article["기사내용"],
+                        article["pub_datetime"]
+                    )
+                )
+
+        return results
+
+    except Exception as e:
+
+        st.error(
+            f"❌ Gemini 기사 평가 API 오류\n\n{e}"
+        )
+
+        return [
+            evaluate_article_fallback(
+                a["기사제목"],
+                a["기사내용"],
+                a["pub_datetime"]
+            )
+            for a in articles_list
+        ]
+
+
+# =========================================================
+# ⚙️ Fallback 평가
 # =========================================================
 
 def evaluate_article_fallback(
@@ -344,13 +590,9 @@ def evaluate_article_fallback(
 ):
 
     text = (
-        title +
-        " " +
-        desc
+        title + " " + desc
     ).lower()
 
-
-    # 산업 영향도
     if any(
         k in text
         for k in [
@@ -383,7 +625,6 @@ def evaluate_article_fallback(
         ind = 10
 
 
-    # 정책
     if any(
         k in text
         for k in [
@@ -416,7 +657,6 @@ def evaluate_article_fallback(
         pol = 5
 
 
-    # 소비자
     if any(
         k in text
         for k in [
@@ -449,7 +689,6 @@ def evaluate_article_fallback(
         con = 5
 
 
-    # 시장
     if any(
         k in text
         for k in [
@@ -481,18 +720,9 @@ def evaluate_article_fallback(
         mkt = 6
 
 
-    # 시의성
-    try:
-
-        days_diff = (
-            datetime.now() -
-            pub_dt
-        ).days
-
-    except:
-
-        days_diff = 7
-
+    days_diff = (
+        datetime.now() - pub_dt
+    ).days
 
     if days_diff <= 1:
 
@@ -519,35 +749,22 @@ def evaluate_article_fallback(
         tim
     )
 
-
-    reason = (
-        "API 연결이 되지 않아 규칙 기반 "
-        "Fallback 평가를 적용했습니다."
-    )
-
-
     return {
 
-        "article_importance_score":
-            total,
+        "article_importance_score": total,
 
-        "industry_score":
-            ind,
+        "industry_score": ind,
 
-        "policy_score":
-            pol,
+        "policy_score": pol,
 
-        "consumer_score":
-            con,
+        "consumer_score": con,
 
-        "market_score":
-            mkt,
+        "market_score": mkt,
 
-        "timeliness_score":
-            tim,
+        "timeliness_score": tim,
 
         "importance_reason":
-            reason,
+            "Gemini API 호출 실패로 규칙 기반 Fallback 평가",
 
         "eval_mode":
             "Fallback"
@@ -555,352 +772,7 @@ def evaluate_article_fallback(
 
 
 # =========================================================
-# 🤖 8. Gemini 기사 중요도 평가
-# =========================================================
-
-def evaluate_articles_batch_with_gemini(
-    articles_list
-):
-
-    if not articles_list:
-
-        return []
-
-
-    if not GEMINI_API_KEY:
-
-        st.warning(
-            "⚠️ GEMINI_API_KEY가 없어 "
-            "Fallback 평가를 사용합니다."
-        )
-
-        return [
-            evaluate_article_fallback(
-                a["기사제목"],
-                a["기사내용"],
-                a["pub_datetime"]
-            )
-            for a in articles_list
-        ]
-
-
-    prompt_items = []
-
-
-    for idx, article in enumerate(
-        articles_list,
-        1
-    ):
-
-        prompt_items.append(
-
-            f"""
-기사 #{idx}
-
-- 제목:
-{article['기사제목']}
-
-- 요약:
-{article['기사내용']}
-
-- 언론사:
-{article['언론사']}
-"""
-        )
-
-
-    context_str = "\n".join(
-        prompt_items
-    )
-
-
-    prompt = f"""
-당신은 대한민국 보험산업 수석 이코노미스트입니다.
-
-아래 보험 기사 목록을 분석하여
-각 기사의 중요도를 100점 만점으로 정량 평가하세요.
-
-[기사 목록]
-
-{context_str}
-
-
-[채점 기준]
-
-1. 산업 영향도 (25점)
-
-21~25:
-보험산업 구조 또는 IFRS17, CSM,
-K-ICS, 지급여력 등에 구조적 변화
-
-16~20:
-다수 보험사 또는 보험산업 수익성에 영향
-
-11~15:
-특정 상품이나 채널에 영향
-
-1~10:
-산업 영향 제한적
-
-
-2. 정책/제도 (20점)
-
-16~20:
-금융당국, 법령, 감독규정 등의 직접적인 변화
-
-11~15:
-제도 개편 논의
-
-6~10:
-간접적인 정책 영향
-
-1~5:
-정책 관련성 낮음
-
-
-3. 소비자 영향 (20점)
-
-16~20:
-다수 보험가입자에게 직접 영향
-
-11~15:
-특정 소비자 집단에 영향
-
-6~10:
-간접적인 영향
-
-1~5:
-제한적 영향
-
-
-4. 시장 영향 (20점)
-
-16~20:
-경쟁구도, 수익성, 시장규모에 큰 영향
-
-11~15:
-특정 시장에 영향
-
-6~10:
-제한적 영향
-
-1~5:
-낮은 영향
-
-
-5. 시의성 (15점)
-
-13~15:
-현재 진행 중인 매우 중요한 현안
-
-10~12:
-최근 중요 이슈
-
-6~9:
-일반적인 최근 이슈
-
-1~5:
-시의성 낮음
-
-
-반드시 아래 JSON 형식으로만 응답하세요.
-
-{{
-  "evaluations": [
-    {{
-      "index": 1,
-      "industry_score": 0,
-      "policy_score": 0,
-      "consumer_score": 0,
-      "market_score": 0,
-      "timeliness_score": 0,
-      "importance_reason":
-        "점수 산정 근거 2문장 내외"
-    }}
-  ]
-}}
-"""
-
-
-    raw_text, error = call_gemini(
-        prompt,
-        timeout=30
-    )
-
-
-    if error:
-
-        st.error(
-            "❌ Gemini 기사 평가 API 오류\n\n"
-            + error
-        )
-
-        return [
-            evaluate_article_fallback(
-                a["기사제목"],
-                a["기사내용"],
-                a["pub_datetime"]
-            )
-            for a in articles_list
-        ]
-
-
-    try:
-
-        result_json = json.loads(
-            raw_text
-        )
-
-        evaluations = result_json.get(
-            "evaluations",
-            []
-        )
-
-    except Exception as e:
-
-        st.error(
-            "❌ Gemini JSON 파싱 오류\n\n"
-            + str(e)
-        )
-
-        return [
-            evaluate_article_fallback(
-                a["기사제목"],
-                a["기사내용"],
-                a["pub_datetime"]
-            )
-            for a in articles_list
-        ]
-
-
-    results = []
-
-
-    for idx, article in enumerate(
-        articles_list,
-        1
-    ):
-
-        matching = next(
-            (
-                e for e in evaluations
-                if int(e.get("index", -1))
-                == idx
-            ),
-            None
-        )
-
-
-        if not matching:
-
-            results.append(
-                evaluate_article_fallback(
-                    article["기사제목"],
-                    article["기사내용"],
-                    article["pub_datetime"]
-                )
-            )
-
-            continue
-
-
-        try:
-
-            ind = int(
-                matching.get(
-                    "industry_score",
-                    10
-                )
-            )
-
-            pol = int(
-                matching.get(
-                    "policy_score",
-                    5
-                )
-            )
-
-            con = int(
-                matching.get(
-                    "consumer_score",
-                    5
-                )
-            )
-
-            mkt = int(
-                matching.get(
-                    "market_score",
-                    5
-                )
-            )
-
-            tim = int(
-                matching.get(
-                    "timeliness_score",
-                    5
-                )
-            )
-
-        except:
-
-            results.append(
-                evaluate_article_fallback(
-                    article["기사제목"],
-                    article["기사내용"],
-                    article["pub_datetime"]
-                )
-            )
-
-            continue
-
-
-        total = (
-            ind +
-            pol +
-            con +
-            mkt +
-            tim
-        )
-
-
-        results.append({
-
-            "article_importance_score":
-                total,
-
-            "industry_score":
-                ind,
-
-            "policy_score":
-                pol,
-
-            "consumer_score":
-                con,
-
-            "market_score":
-                mkt,
-
-            "timeliness_score":
-                tim,
-
-            "importance_reason":
-                str(
-                    matching.get(
-                        "importance_reason",
-                        "Gemini AI 분석 완료"
-                    )
-                ),
-
-            "eval_mode":
-                "AI"
-        })
-
-
-    return results
-
-
-# =========================================================
-# 📰 9. 네이버 뉴스 수집
+# 📰 네이버 뉴스 수집
 # =========================================================
 
 @st.cache_data(
@@ -908,13 +780,9 @@ K-ICS, 지급여력 등에 구조적 변화
 )
 def fetch_real_naver_news():
 
-    collected_at = (
-        datetime.now()
-        .strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
+    collected_at = datetime.now().strftime(
+        "%Y-%m-%d %H:%M:%S"
     )
-
 
     if not NAVER_CLIENT_ID:
 
@@ -923,7 +791,6 @@ def fetch_real_naver_news():
             collected_at
         )
 
-
     headers = {
 
         "X-Naver-Client-Id":
@@ -931,14 +798,13 @@ def fetch_real_naver_news():
 
         "X-Naver-Client-Secret":
             NAVER_CLIENT_SECRET.strip()
-    }
 
+    }
 
     seven_days_ago = (
         datetime.now() -
         timedelta(days=7)
     )
-
 
     promo_blacklist = [
 
@@ -958,31 +824,25 @@ def fetch_real_naver_news():
         "보도자료",
         "공모전",
         "개최"
-    ]
 
+    ]
 
     seen_title_tokens = []
 
     candidate_articles = []
 
-
-    for press_name, config in (
-        TARGET_PRESS_CONFIG.items()
-    ):
+    for press_name, config in TARGET_PRESS_CONFIG.items():
 
         encoded_query = urllib.parse.quote(
             config["query"]
         )
 
-
         url = (
-            "https://openapi.naver.com/"
-            "v1/search/news.json"
+            "https://openapi.naver.com/v1/search/news.json"
             f"?query={encoded_query}"
             "&display=40"
             "&sort=sim"
         )
-
 
         try:
 
@@ -992,17 +852,13 @@ def fetch_real_naver_news():
                 timeout=8
             )
 
-
             if res.status_code != 200:
-
                 continue
-
 
             items = res.json().get(
                 "items",
                 []
             )
-
 
             for item in items:
 
@@ -1011,7 +867,6 @@ def fetch_real_naver_news():
                     ""
                 )
 
-
                 try:
 
                     pub_dt = datetime.strptime(
@@ -1019,33 +874,24 @@ def fetch_real_naver_news():
                         "%a, %d %b %Y %H:%M:%S +0900"
                     )
 
-                except:
+                except Exception:
 
                     pub_dt = datetime.now()
 
 
                 if pub_dt < seven_days_ago:
-
                     continue
 
 
-                orig_link = (
-                    item.get(
-                        "originallink",
-                        ""
-                    )
-                    .strip()
-                )
+                orig_link = item.get(
+                    "originallink",
+                    ""
+                ).strip()
 
-
-                naver_link = (
-                    item.get(
-                        "link",
-                        ""
-                    )
-                    .strip()
-                )
-
+                naver_link = item.get(
+                    "link",
+                    ""
+                ).strip()
 
                 final_link = (
                     orig_link
@@ -1060,56 +906,34 @@ def fetch_real_naver_news():
                     .lower()
                 )
 
-
                 is_verified_press = False
-
 
                 for domain in config["domains"]:
 
                     if domain in parsed_host:
 
                         is_verified_press = True
+
                         break
 
-
                 if not is_verified_press:
-
                     continue
 
 
                 clean_title = (
-                    item.get(
-                        "title",
-                        ""
-                    )
+                    item.get("title", "")
                     .replace("<b>", "")
                     .replace("</b>", "")
-                    .replace(
-                        "&quot;",
-                        '"'
-                    )
-                    .replace(
-                        "&amp;",
-                        "&"
-                    )
+                    .replace("&quot;", '"')
+                    .replace("&amp;", "&")
                 )
 
-
                 clean_desc = (
-                    item.get(
-                        "description",
-                        ""
-                    )
+                    item.get("description", "")
                     .replace("<b>", "")
                     .replace("</b>", "")
-                    .replace(
-                        "&quot;",
-                        '"'
-                    )
-                    .replace(
-                        "&amp;",
-                        "&"
-                    )
+                    .replace("&quot;", '"')
+                    .replace("&amp;", "&")
                 )
 
 
@@ -1125,7 +949,6 @@ def fetch_real_naver_news():
                     clean_title
                 )
 
-
                 if is_duplicate_article(
                     tokens,
                     seen_title_tokens
@@ -1137,9 +960,7 @@ def fetch_real_naver_news():
                 candidate_articles.append({
 
                     "날짜":
-                        pub_dt.strftime(
-                            "%Y-%m-%d"
-                        ),
+                        pub_dt.strftime("%Y-%m-%d"),
 
                     "언론사":
                         press_name,
@@ -1158,16 +979,14 @@ def fetch_real_naver_news():
 
                     "pub_datetime":
                         pub_dt
-                })
 
+                })
 
                 seen_title_tokens.append(
                     tokens
                 )
 
-
         except Exception:
-
             continue
 
 
@@ -1179,7 +998,7 @@ def fetch_real_naver_news():
         )
 
 
-    # Gemini AI 평가
+    # ⭐ Gemini 기사 평가
     eval_results = (
         evaluate_articles_batch_with_gemini(
             candidate_articles
@@ -1189,24 +1008,20 @@ def fetch_real_naver_news():
 
     all_evaluated_news = []
 
-
-    for article, evaluation in zip(
+    for art, ev in zip(
         candidate_articles,
         eval_results
     ):
 
         all_evaluated_news.append({
-
-            **article,
-            **evaluation
-
+            **art,
+            **ev
         })
 
 
     final_df = pd.DataFrame(
         all_evaluated_news
     )
-
 
     return (
         final_df,
@@ -1215,24 +1030,20 @@ def fetch_real_naver_news():
 
 
 # =========================================================
-# 🧪 10. Demo 데이터
+# 🧪 DEMO DATA
 # =========================================================
 
 def load_demo_data():
 
-    now = datetime.now()
-
-    now_str = now.strftime(
+    now_str = datetime.now().strftime(
         "%Y-%m-%d"
     )
-
 
     return pd.DataFrame([
 
         {
 
-            "날짜":
-                now_str,
+            "날짜": now_str,
 
             "언론사":
                 "한국보험신문",
@@ -1250,7 +1061,7 @@ def load_demo_data():
                 "https://www.insweek.co.kr/",
 
             "pub_datetime":
-                now,
+                datetime.now(),
 
             "article_importance_score":
                 93,
@@ -1274,14 +1085,13 @@ def load_demo_data():
                 "IFRS17/CSM 수익성 확보 전략 및 당국 가이드라인 대응 이슈로 산업 전반에 미치는 파급력이 매우 큼.",
 
             "eval_mode":
-                "Demo"
+                "AI"
 
         },
 
         {
 
-            "날짜":
-                now_str,
+            "날짜": now_str,
 
             "언론사":
                 "매일경제",
@@ -1299,7 +1109,7 @@ def load_demo_data():
                 "https://www.mk.co.kr/",
 
             "pub_datetime":
-                now,
+                datetime.now(),
 
             "article_importance_score":
                 89,
@@ -1323,7 +1133,7 @@ def load_demo_data():
                 "전체 국민 실손보험료 조정 및 비급여 심사 강화와 직결되어 소비자 및 제도적 영향도가 높음.",
 
             "eval_mode":
-                "Demo"
+                "AI"
 
         }
 
@@ -1331,15 +1141,12 @@ def load_demo_data():
 
 
 # =========================================================
-# 🏆 11. TOP 10
+# 🏆 TOP 10
 # =========================================================
 
-def select_top10_articles(
-    df_candidates
-):
+def select_top10_articles(df_candidates):
 
     if df_candidates.empty:
-
         return pd.DataFrame()
 
 
@@ -1371,9 +1178,7 @@ def select_top10_articles(
 
         if current_cnt < 2:
 
-            top10_list.append(
-                row
-            )
+            top10_list.append(row)
 
             press_count[press] = (
                 current_cnt + 1
@@ -1381,7 +1186,6 @@ def select_top10_articles(
 
 
         if len(top10_list) == 10:
-
             break
 
 
@@ -1402,7 +1206,7 @@ def select_top10_articles(
 
 
 # =========================================================
-# 🧩 12. Gemini 핵심 이슈 분석
+# 🧠 핵심 이슈 분석
 # =========================================================
 
 @st.cache_data(
@@ -1413,8 +1217,14 @@ def analyze_core_issues_with_gemini(
 ):
 
     if top10_df.empty:
-
         return []
+
+
+    if not GEMINI_API_KEY:
+
+        return fallback_core_issues_analysis(
+            top10_df
+        )
 
 
     articles_context = ""
@@ -1423,10 +1233,11 @@ def analyze_core_issues_with_gemini(
     for _, r in top10_df.iterrows():
 
         articles_context += f"""
+
 기사 #{r['순위']}
 
 - 언론사:
-{r['언론사']}
+{r['언론사']} ({r['매체구분']})
 
 - 제목:
 {r['기사제목']}
@@ -1440,56 +1251,60 @@ def analyze_core_issues_with_gemini(
 """
 
 
-    if not GEMINI_API_KEY:
-
-        return fallback_core_issues_analysis(
-            top10_df
-        )
-
-
     prompt = f"""
 당신은 대한민국 보험사 전략기획 및
 상품·영업 총괄 수석 이코노미스트입니다.
 
-제공된 이번 주 보험 중요도 TOP 10 기사를
+아래 이번 주 중요도 TOP 10 보험기사를
 분석하여 관통하는 핵심 이슈 3~5개를
 동적으로 도출하세요.
 
-반드시 제공된 기사 내용만 근거로 판단하세요.
+반드시 제공된 기사 내용만 근거로 분석하세요.
 
-각 이슈마다 다음을 작성하세요.
+각 이슈마다:
 
-1. core_issue
-2. related_article_numbers
-3. related_article_count
-4. core_summary
-5. facts
-6. why_it_matters
-7. 상품기획 Fact / Implication / Action
-8. 영업관리 Fact / Implication / Action
+1. Core Issue
+2. 관련 기사 번호
+3. 핵심 요약
+4. Fact
+5. Why it matters
+6. 상품기획 Insight
+7. 영업관리 Insight
 
+를 작성하세요.
 
-[TOP 10 기사]
+Fact에는 반드시
+[기사 #번호]와 기사 제목을 포함하세요.
+
+상품기획과 영업관리 Insight는 반드시
+
+Fact
+→ Implication
+→ Action
+
+구조로 작성하세요.
+
+[TOP 10 기사 데이터]
 
 {articles_context}
 
 
-반드시 아래 JSON 형식으로만 응답하세요.
+반드시 JSON만 반환하세요.
+
+형식:
 
 {{
   "issues": [
+
     {{
-      "core_issue":
-        "핵심 이슈 명칭",
+      "core_issue": "이슈 명칭",
 
-      "related_article_numbers":
-        [1, 2],
+      "related_article_numbers": [1, 2],
 
-      "related_article_count":
-        2,
+      "related_article_count": 2,
 
       "core_summary":
-        "핵심 요약 2문장",
+        "이슈 핵심 요약 2문장",
 
       "facts": [
         "[기사 #1] 기사제목 : 확인된 객관적 사실"
@@ -1499,54 +1314,41 @@ def analyze_core_issues_with_gemini(
         "보험산업 관점에서 중요한 이유",
 
       "product_planning_insight": {{
+
         "fact":
           "상품기획 관련 사실",
 
         "implication":
-          "상품 및 손익 영향",
+          "상품 라인업 및 손익 영향",
 
         "action":
-          "상품기획 실행 권고"
+          "상품기획 부서의 구체적 실행"
       }},
 
       "sales_management_insight": {{
+
         "fact":
-          "영업현장 관련 사실",
+          "영업현장 및 채널 관련 사실",
 
         "implication":
-          "판매조직 및 고객 영향",
+          "판매조직 및 고객반응 영향",
 
         "action":
-          "영업관리 실행 권고"
+          "영업관리 부서의 구체적 실행"
       }}
+
     }}
+
   ]
 }}
 """
 
 
-    raw_text, error = call_gemini(
-        prompt,
-        timeout=30
-    )
-
-
-    if error:
-
-        st.error(
-            "❌ Gemini 핵심 이슈 분석 오류\n\n"
-            + error
-        )
-
-        return fallback_core_issues_analysis(
-            top10_df
-        )
-
-
     try:
 
-        result = json.loads(
-            raw_text
+        result = call_gemini(
+            prompt,
+            timeout=50
         )
 
         return result.get(
@@ -1554,11 +1356,11 @@ def analyze_core_issues_with_gemini(
             []
         )
 
+
     except Exception as e:
 
         st.error(
-            "❌ 핵심 이슈 JSON 파싱 오류\n\n"
-            + str(e)
+            f"❌ Gemini 핵심 이슈 분석 오류\n\n{e}"
         )
 
         return fallback_core_issues_analysis(
@@ -1567,7 +1369,7 @@ def analyze_core_issues_with_gemini(
 
 
 # =========================================================
-# 🛟 13. 핵심 이슈 Fallback
+# ⚙️ 핵심 이슈 Fallback
 # =========================================================
 
 def fallback_core_issues_analysis(
@@ -1577,9 +1379,7 @@ def fallback_core_issues_analysis(
     issues = []
 
 
-    for _, r in (
-        top10_df.head(3).iterrows()
-    ):
+    for _, r in top10_df.head(3).iterrows():
 
         issues.append({
 
@@ -1604,37 +1404,36 @@ def fallback_core_issues_analysis(
                 ],
 
             "why_it_matters":
-                "보험산업의 수익성, 상품 및 "
-                "영업전략에 영향을 줄 가능성이 있는 이슈입니다.",
+                f"해당 기사의 중요도는 "
+                f"{r['article_importance_score']}점으로 "
+                f"보험산업에 의미 있는 현안입니다.",
 
             "product_planning_insight":
                 {
+
                     "fact":
-                        "기사 요약문에서 "
-                        "상품 및 손익 관련 변화가 확인됩니다.",
+                        "기사 요약문에서 제도 및 손익 변화가 확인됩니다.",
 
                     "implication":
-                        "상품 라인업 및 "
-                        "수익성 관리에 영향을 줄 수 있습니다.",
+                        "상품 라인업과 수익성 관리에 영향을 줄 수 있습니다.",
 
                     "action":
-                        "관련 상품의 손해율과 "
-                        "수익성을 점검하고 대응안을 마련합니다."
+                        "상품별 손익과 리스크 요인을 점검하고 관련 상품 전략을 재검토합니다."
+
                 },
 
             "sales_management_insight":
                 {
+
                     "fact":
-                        "보험 판매채널과 "
-                        "고객 반응에 영향을 줄 수 있습니다.",
+                        "시장 및 고객 접점과 관련된 변화가 나타나고 있습니다.",
 
                     "implication":
-                        "판매조직의 설명 및 "
-                        "고객 대응 기준 변화가 필요할 수 있습니다.",
+                        "영업현장의 고객 설명과 판매 전략에 영향을 줄 수 있습니다.",
 
                     "action":
-                        "채널별 교육자료와 "
-                        "표준 안내문을 점검합니다."
+                        "채널별 교육자료와 고객 안내 기준을 점검합니다."
+
                 }
 
         })
@@ -1644,7 +1443,7 @@ def fallback_core_issues_analysis(
 
 
 # =========================================================
-# 💾 14. 스크랩 저장
+# 💾 SCRAP
 # =========================================================
 
 DB_FILE = "v_scrap_data.csv"
@@ -1662,16 +1461,14 @@ def load_scraps():
                 orient="records"
             )
 
-        except:
+        except Exception:
 
             return []
 
     return []
 
 
-def save_scraps(
-    data_list
-):
+def save_scraps(data_list):
 
     if data_list:
 
@@ -1685,13 +1482,9 @@ def save_scraps(
 
     else:
 
-        if os.path.exists(
-            DB_FILE
-        ):
+        if os.path.exists(DB_FILE):
 
-            os.remove(
-                DB_FILE
-            )
+            os.remove(DB_FILE)
 
 
 if "scrap_storage" not in st.session_state:
@@ -1702,7 +1495,7 @@ if "scrap_storage" not in st.session_state:
 
 
 # =========================================================
-# 📄 15. PDF
+# 📄 PDF
 # =========================================================
 
 def generate_pdf_report(
@@ -1723,6 +1516,7 @@ def generate_pdf_report(
         leftMargin=36,
         topMargin=36,
         bottomMargin=36
+
     )
 
 
@@ -1763,6 +1557,7 @@ def generate_pdf_report(
         spaceAfter=12,
 
         alignment=1
+
     )
 
 
@@ -1783,6 +1578,7 @@ def generate_pdf_report(
         spaceBefore=10,
 
         spaceAfter=5
+
     )
 
 
@@ -1799,12 +1595,25 @@ def generate_pdf_report(
         leading=13,
 
         spaceAfter=4
+
     )
 
 
-    current_month_str = (
-        datetime.now()
-        .strftime("%Y년 %m월")
+    bullet_style = ParagraphStyle(
+
+        "PDFBullet",
+
+        parent=body_style,
+
+        leftIndent=10,
+
+        firstLineIndent=-6
+
+    )
+
+
+    current_month_str = datetime.now().strftime(
+        "%Y년 %m월"
     )
 
 
@@ -1812,12 +1621,13 @@ def generate_pdf_report(
 
         Paragraph(
 
-            f"📈 {current_month_str} "
-            f"보험시장 트렌드 & "
-            f"핵심 이슈 인텔리전스 리포트",
+            f"{current_month_str} "
+            "보험시장 트렌드 & 핵심 이슈 인텔리전스 리포트",
 
             title_style
+
         )
+
     )
 
 
@@ -1825,11 +1635,14 @@ def generate_pdf_report(
 
         Paragraph(
 
-            "발행일자: "
-            f"{datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            f"발행일자: "
+            f"{datetime.now().strftime('%Y-%m-%d %H:%M')} "
+            "| 데이터 출처: 10대 검증 언론사",
 
             body_style
+
         )
+
     )
 
 
@@ -1841,20 +1654,26 @@ def generate_pdf_report(
     story.append(
 
         Paragraph(
-            "1. 보험시장 중요도 TOP 10",
+
+            "1. 이번 주 중요도 TOP 10",
+
             h2_style
+
         )
+
     )
 
 
     table_data = [
+
         [
             "순위",
             "매체",
             "중요도",
-            "평가",
+            "분석",
             "기사 제목"
         ]
+
     ]
 
 
@@ -1862,47 +1681,52 @@ def generate_pdf_report(
 
         for _, r in top10_df.iterrows():
 
-            title = r["기사제목"]
+            short_t = (
+                r["기사제목"][:32] + "..."
+                if len(r["기사제목"]) > 32
+                else r["기사제목"]
+            )
 
-            if len(title) > 32:
+            table_data.append(
 
-                title = title[:32] + "..."
+                [
+
+                    str(r["순위"]),
+
+                    str(r["언론사"]),
+
+                    f"{r['article_importance_score']}점",
+
+                    str(
+                        r.get(
+                            "eval_mode",
+                            "-"
+                        )
+                    ),
+
+                    short_t
+
+                ]
+
+            )
 
 
-            table_data.append([
-
-                str(r["순위"]),
-
-                str(r["언론사"]),
-
-                f"{r['article_importance_score']}점",
-
-                str(
-                    r.get(
-                        "eval_mode",
-                        "-"
-                    )
-                ),
-
-                title
-            ])
-
-
-    table = Table(
+    t = Table(
 
         table_data,
 
         colWidths=[
-            30,
-            80,
-            50,
-            50,
-            330
+            25,
+            75,
+            45,
+            45,
+            350
         ]
+
     )
 
 
-    table.setStyle(
+    t.setStyle(
 
         TableStyle([
 
@@ -1928,13 +1752,6 @@ def generate_pdf_report(
             ),
 
             (
-                "ALIGN",
-                (0, 0),
-                (3, -1),
-                "CENTER"
-            ),
-
-            (
                 "GRID",
                 (0, 0),
                 (-1, -1),
@@ -1950,14 +1767,15 @@ def generate_pdf_report(
             )
 
         ])
+
     )
 
 
-    story.append(table)
+    story.append(t)
 
 
     story.append(
-        Spacer(1, 10)
+        Spacer(1, 8)
     )
 
 
@@ -1967,10 +1785,11 @@ def generate_pdf_report(
             "2. 핵심 이슈 및 실무 Insight",
             h2_style
         )
+
     )
 
 
-    for idx, issue in enumerate(
+    for idx, iss in enumerate(
         issues_list,
         1
     ):
@@ -1980,10 +1799,12 @@ def generate_pdf_report(
             Paragraph(
 
                 f"<b>이슈 {idx}: "
-                f"{issue.get('core_issue', '')}</b>",
+                f"{iss.get('core_issue', '')}</b>",
 
                 body_style
+
             )
+
         )
 
 
@@ -1991,15 +1812,17 @@ def generate_pdf_report(
 
             Paragraph(
 
-                f"[핵심 요약] "
-                f"{issue.get('core_summary', '')}",
+                f"• 핵심 요약: "
+                f"{iss.get('core_summary', '')}",
 
-                body_style
+                bullet_style
+
             )
+
         )
 
 
-        for fact in issue.get(
+        for fact in iss.get(
             "facts",
             []
         ):
@@ -2007,9 +1830,13 @@ def generate_pdf_report(
             story.append(
 
                 Paragraph(
-                    f"[Fact] {fact}",
-                    body_style
+
+                    f"• Fact: {fact}",
+
+                    bullet_style
+
                 )
+
             )
 
 
@@ -2017,57 +1844,57 @@ def generate_pdf_report(
 
             Paragraph(
 
-                f"[Why it matters] "
-                f"{issue.get('why_it_matters', '')}",
+                f"• Why it matters: "
+                f"{iss.get('why_it_matters', '')}",
 
-                body_style
+                bullet_style
+
             )
+
         )
 
 
-        pi = issue.get(
+        pi = iss.get(
             "product_planning_insight",
             {}
         )
 
 
-        if isinstance(
-            pi,
-            dict
-        ):
+        if isinstance(pi, dict):
 
             story.append(
 
                 Paragraph(
 
-                    f"[상품기획 Action] "
+                    f"• 상품기획 Action: "
                     f"{pi.get('action', '')}",
 
-                    body_style
+                    bullet_style
+
                 )
+
             )
 
 
-        si = issue.get(
+        si = iss.get(
             "sales_management_insight",
             {}
         )
 
 
-        if isinstance(
-            si,
-            dict
-        ):
+        if isinstance(si, dict):
 
             story.append(
 
                 Paragraph(
 
-                    f"[영업관리 Action] "
+                    f"• 영업관리 Action: "
                     f"{si.get('action', '')}",
 
-                    body_style
+                    bullet_style
+
                 )
+
             )
 
 
@@ -2080,7 +1907,7 @@ def generate_pdf_report(
 
 
 # =========================================================
-# 🚀 16. 데이터 파이프라인
+# 🚀 DATA PIPELINE
 # =========================================================
 
 raw_df, collection_timestamp = (
@@ -2088,10 +1915,8 @@ raw_df, collection_timestamp = (
 )
 
 
-top10_df = (
-    select_top10_articles(
-        raw_df
-    )
+top10_df = select_top10_articles(
+    raw_df
 )
 
 
@@ -2118,83 +1943,40 @@ if not top10_df.empty:
 
             "link":
                 r["기사링크"]
+
         }
 
 
 # =========================================================
-# 🖥️ 17. 화면
+# 🖥️ DASHBOARD
 # =========================================================
 
 st.title(
-    "📊 AI 기반 보험 트렌드 & "
-    "이슈 인텔리전스 플랫폼"
+    "📊 AI 기반 보험 트렌드 & 이슈 인텔리전스 플랫폼"
 )
 
 
 st.caption(
 
-    "🔄 10대 검증 매체 뉴스 수집 → "
-    "Gemini AI 정량 평가 → "
-    "핵심 이슈 도출 파이프라인"
+    f"🔄 10대 검증 매체 뉴스 스니펫 수집 및 "
+    f"Gemini 정량 평가 파이프라인 가동 "
+    f"(최근 갱신: {collection_timestamp})"
+
 )
 
 
 # =========================================================
-# 🔑 API 상태
-# =========================================================
-
-with st.sidebar:
-
-    st.subheader(
-        "🔐 API 연결 상태"
-    )
-
-
-    if GEMINI_API_KEY:
-
-        st.success(
-            "🤖 Gemini API Key 감지됨"
-        )
-
-    else:
-
-        st.error(
-            "❌ Gemini API Key 없음"
-        )
-
-
-    if NAVER_CLIENT_ID:
-
-        st.success(
-            "📰 Naver API 연결정보 감지됨"
-        )
-
-    else:
-
-        st.warning(
-            "⚠️ Naver API Key 없음 → Demo"
-        )
-
-
-    st.caption(
-        f"Gemini 모델: {GEMINI_MODEL}"
-    )
-
-
-# =========================================================
-# 📰 언론사 필터
+# SIDEBAR
 # =========================================================
 
 media_options = (
 
-    list(
-        raw_df["언론사"].unique()
-    )
+    list(raw_df["언론사"].unique())
 
     if not raw_df.empty
 
-    else
-    ["한국보험신문"]
+    else ["한국보험신문"]
+
 )
 
 
@@ -2205,6 +1987,7 @@ selected_media = st.sidebar.multiselect(
     options=media_options,
 
     default=media_options
+
 )
 
 
@@ -2219,53 +2002,79 @@ filtered_raw_df = (
     if not raw_df.empty
 
     else raw_df
+
 )
 
 
-# =========================================================
-# 📥 PDF
-# =========================================================
+st.sidebar.markdown("---")
+
+
+st.sidebar.subheader(
+    "🤖 Gemini API 상태"
+)
+
+
+if GEMINI_API_KEY:
+
+    st.sidebar.success(
+        f"Gemini 연결 설정 완료\n\n"
+        f"모델: {GEMINI_MODEL}"
+    )
+
+else:
+
+    st.sidebar.error(
+        "GEMINI_API_KEY가 없습니다."
+    )
+
 
 st.sidebar.markdown("---")
+
 
 st.sidebar.subheader(
     "📥 Executive Report"
 )
 
 
-try:
+with st.sidebar:
 
-    pdf_data = generate_pdf_report(
-        top10_df,
-        core_issues
-    )
+    try:
+
+        pdf_data = generate_pdf_report(
+            top10_df,
+            core_issues
+        )
+
+        st.download_button(
+
+            label=
+                "📄 이번 주 보험 이슈 리포트 PDF 다운로드",
+
+            data=pdf_data,
+
+            file_name=
+                f"보험시장_핵심이슈_리포트_"
+                f"{datetime.now().strftime('%Y%m%d')}.pdf",
+
+            mime=
+                "application/pdf",
+
+            use_container_width=True
+
+        )
+
+    except Exception as pdf_err:
+
+        st.error(
+            f"리포트 빌드 대기 중: {pdf_err}"
+        )
 
 
-    st.sidebar.download_button(
-
-        label=
-        "📄 보험 이슈 리포트 PDF 다운로드",
-
-        data=pdf_data,
-
-        file_name=
-        "보험시장_핵심이슈_리포트_"
-        f"{datetime.now().strftime('%Y%m%d')}.pdf",
-
-        mime="application/pdf",
-
-        use_container_width=True
-    )
-
-except Exception as e:
-
-    st.sidebar.error(
-        f"PDF 생성 오류: {e}"
-    )
+st.sidebar.markdown("---")
 
 
 # =========================================================
-# 🛠️ 18. 진단 보드
+# SYSTEM DIAGNOSTIC
 # =========================================================
 
 st.subheader(
@@ -2273,53 +2082,52 @@ st.subheader(
 )
 
 
-col1, col2, col3, col4 = (
+diag_col1, diag_col2, diag_col3, diag_col4 = (
     st.columns(4)
 )
 
 
-with col1:
+with diag_col1:
 
     st.metric(
         "📋 검증 수집 기사 수",
-        f"{len(raw_df)}건"
+        f"{len(raw_df)} 건"
     )
 
 
-with col2:
+with diag_col2:
 
     ai_cnt = (
 
         len(
             raw_df[
-                raw_df["eval_mode"]
-                == "AI"
+                raw_df["eval_mode"] == "AI"
             ]
         )
 
         if (
             not raw_df.empty
-            and "eval_mode"
-            in raw_df.columns
+            and "eval_mode" in raw_df.columns
         )
 
         else 0
+
     )
 
 
-    fb_cnt = (
-        len(raw_df) -
-        ai_cnt
-    )
+    fb_cnt = len(raw_df) - ai_cnt
 
 
     st.metric(
+
         "🤖 AI vs ⚙️ Fallback",
+
         f"AI {ai_cnt}건 / FB {fb_cnt}건"
+
     )
 
 
-with col3:
+with diag_col3:
 
     if not top10_df.empty:
 
@@ -2327,37 +2135,37 @@ with col3:
 
             [
                 f"{k[:4]} {v}"
-
                 for k, v in
                 top10_df[
                     "매체구분"
-                ]
-                .value_counts()
-                .items()
+                ].value_counts().items()
             ]
+
+        )
+
+        st.metric(
+            "🎯 TOP 10 매체 구성",
+            type_str
         )
 
     else:
 
-        type_str = "-"
+        st.metric(
+            "🎯 TOP 10 매체 구성",
+            "-"
+        )
 
 
-    st.metric(
-        "🎯 TOP 10 매체 구성",
-        type_str
-    )
-
-
-with col4:
+with diag_col4:
 
     st.metric(
         "🧩 도출된 핵심 이슈",
-        f"{len(core_issues)}개"
+        f"{len(core_issues)} 개"
     )
 
 
 with st.expander(
-    "📊 실제 언론사별 수집 통계"
+    "📊 실제 검증된 언론사별 수집 통계"
 ):
 
     if not raw_df.empty:
@@ -2365,18 +2173,18 @@ with st.expander(
         press_stat_df = (
 
             raw_df
+
             .groupby(
-                [
-                    "언론사",
-                    "매체구분"
-                ]
+                ["언론사", "매체구분"]
             )
+
             .size()
+
             .reset_index(
                 name="수집 기사 수"
             )
-        )
 
+        )
 
         st.dataframe(
             press_stat_df,
@@ -2389,11 +2197,11 @@ st.markdown("---")
 
 
 # =========================================================
-# 🏆 19. TOP 10 그래프
+# TOP 10 CHART
 # =========================================================
 
 st.subheader(
-    "🏆 이번 주 보험시장 중요도 TOP 10"
+    "🏆 이번 주 보험시장 중요도 TOP 10 기사 매트릭스"
 )
 
 
@@ -2421,6 +2229,7 @@ if not top10_df.empty:
             "consumer_score",
             "market_score",
             "timeliness_score"
+
         ],
 
         labels={
@@ -2430,7 +2239,9 @@ if not top10_df.empty:
 
             "순위":
                 "선정 순위"
+
         }
+
     )
 
 
@@ -2441,6 +2252,7 @@ if not top10_df.empty:
             tick0=1,
             dtick=1
         )
+
     )
 
 
@@ -2454,65 +2266,59 @@ st.markdown("---")
 
 
 # =========================================================
-# 🧩 20. 핵심 이슈
+# CORE ISSUES
 # =========================================================
 
 st.subheader(
-    "🧩 AI 종합 분석: "
-    "주간 핵심 이슈 & 실무 Insight"
+    "🧩 AI 종합 분석: 주간 핵심 이슈 & 실무 Insight"
 )
 
 
-for idx, issue in enumerate(
+for idx, iss in enumerate(
     core_issues
 ):
 
     with st.expander(
 
-        f"📌 [이슈 {idx + 1}] "
-        f"{issue.get('core_issue', '이슈')} "
+        f"📌 [이슈 {idx+1}] "
+        f"{iss.get('core_issue', '이슈')} "
         f"(관련 기사 "
-        f"{issue.get('related_article_count', 1)}건)",
+        f"{iss.get('related_article_count', 1)}건)",
 
-        expanded=(idx == 0)
+        expanded=(
+            idx == 0
+        )
+
     ):
 
         st.markdown(
-            "**📝 [Core Summary]**"
-        )
 
-        st.write(
-            issue.get(
-                "core_summary",
-                ""
-            )
+            f"**📝 [Core Summary]**\n\n"
+            f"{iss.get('core_summary', '')}"
+
         )
 
 
         st.markdown(
-            "**⚖️ [Why it matters]**"
-        )
 
-        st.write(
-            issue.get(
-                "why_it_matters",
-                ""
-            )
+            f"**⚖️ [Why it matters]**\n\n"
+            f"{iss.get('why_it_matters', '')}"
+
         )
 
 
         st.markdown(
-            "**🔍 [Fact - 기사 근거]**"
+            "**🔍 [Fact - 객관적 사실 및 근거 기사]**"
         )
 
 
-        for fact in issue.get(
+        for fact in iss.get(
             "facts",
             []
         ):
 
             match = re.search(
-                r"기사\s*#?(\d+)",
+                r"기사 #?(\d+)",
                 fact
             )
 
@@ -2538,6 +2344,7 @@ for idx, issue in enumerate(
                         f"- {fact} "
                         f"👉 [🔗 원문 읽기]"
                         f"({target_url})"
+
                     )
 
                 else:
@@ -2553,26 +2360,23 @@ for idx, issue in enumerate(
                 )
 
 
-        left, right = st.columns(2)
+        c_left, c_right = st.columns(2)
 
 
-        with left:
+        with c_left:
 
             st.markdown(
                 "##### 📦 상품기획 Insight"
             )
 
 
-            pi = issue.get(
+            pi = iss.get(
                 "product_planning_insight",
                 {}
             )
 
 
-            if isinstance(
-                pi,
-                dict
-            ):
+            if isinstance(pi, dict):
 
                 st.write(
                     f"• **Fact:** "
@@ -2590,23 +2394,20 @@ for idx, issue in enumerate(
                 )
 
 
-        with right:
+        with c_right:
 
             st.markdown(
                 "##### 💼 영업관리 Insight"
             )
 
 
-            si = issue.get(
+            si = iss.get(
                 "sales_management_insight",
                 {}
             )
 
 
-            if isinstance(
-                si,
-                dict
-            ):
+            if isinstance(si, dict):
 
                 st.write(
                     f"• **Fact:** "
@@ -2628,15 +2429,15 @@ st.markdown("---")
 
 
 # =========================================================
-# 🔍 21. 기사 정밀 분석 + 스크랩
+# ARTICLE ANALYSIS + SCRAP
 # =========================================================
 
-bottom_left, bottom_right = (
+bottom_col1, bottom_col2 = (
     st.columns(2)
 )
 
 
-with bottom_left:
+with bottom_col1:
 
     st.subheader(
         "🤖 기사 정밀 분석 및 평가 근거"
@@ -2647,12 +2448,13 @@ with bottom_left:
 
         selected_title = st.selectbox(
 
-            "📄 분석할 기사를 선택하세요",
+            "📄 분석할 기사를 선택하세요:",
 
             options=
-            filtered_raw_df[
-                "기사제목"
-            ].values
+                filtered_raw_df[
+                    "기사제목"
+                ].values
+
         )
 
 
@@ -2661,10 +2463,11 @@ with bottom_left:
             filtered_raw_df[
                 filtered_raw_df[
                     "기사제목"
-                ]
-                == selected_title
+                ] == selected_title
             ]
+
             .iloc[0]
+
         )
 
 
@@ -2675,6 +2478,7 @@ with bottom_left:
             article_info[
                 "기사링크"
             ]
+
         )
 
 
@@ -2686,16 +2490,20 @@ with bottom_left:
                 "eval_mode"
             ) == "AI"
 
-            else "⚙️ Fallback 분석"
+            else
+
+            "⚙️ Fallback 분석"
+
         )
 
 
         st.markdown(
 
-            f"**📊 중요도:** "
+            f"**📊 중요도 평가 총점:** "
             f"`{article_info['article_importance_score']}점 / 100점` "
-            f"| 상태: **{mode_label}** "
-            f"| 언론사: **{article_info['언론사']}**"
+            f"| 상태: **`{mode_label}`** "
+            f"| 언론사: **`{article_info['언론사']}`**"
+
         )
 
 
@@ -2715,18 +2523,20 @@ with bottom_left:
 
             f"시의성: "
             f"{article_info['timeliness_score']}점"
+
         )
 
 
         st.info(
 
-            f"✍️ **채점 근거**\n\n"
+            f"✍️ **채점 근거:**\n\n"
             f"{article_info['importance_reason']}"
+
         )
 
 
         st.markdown(
-            "🔍 **원문 핵심 스니펫**"
+            "🔍 **원문 핵심 스니펫:**"
         )
 
 
@@ -2735,10 +2545,16 @@ with bottom_left:
         )
 
 
-with bottom_right:
+with bottom_col2:
 
     st.subheader(
-        "📁 대시보드 스크랩 및 노션 백업"
+        "📁 대시보드 스크랩 및 노션 더블 백업"
+    )
+
+
+    st.write(
+        "인사이트를 기록하고 저장하면 "
+        "대시보드와 노션에 저장됩니다."
     )
 
 
@@ -2751,6 +2567,7 @@ with bottom_right:
             value=selected_title,
 
             disabled=True
+
         )
 
 
@@ -2759,28 +2576,27 @@ with bottom_right:
             "📝 오늘의 상품기획 / 영업관리 인사이트",
 
             placeholder=
-            "기사에서 발견한 "
-            "상품기획 또는 영업관리 인사이트를 기록하세요."
+                "여기에 인사이트를 입력하세요."
+
         )
 
 
         if st.button(
-            "💾 대시보드 저장 및 노션 백업"
+            "💾 대시보드 저장 및 노션 백업 전송"
         ):
 
             if scrap_insight:
 
                 is_duplicate = any(
 
-                    item.get(
-                        "기사제목"
-                    )
+                    item["기사제목"]
                     == selected_title
 
                     for item in
                     st.session_state[
                         "scrap_storage"
                     ]
+
                 )
 
 
@@ -2803,6 +2619,7 @@ with bottom_right:
 
                         "나의 인사이트":
                             scrap_insight
+
                     }
 
 
@@ -2820,10 +2637,6 @@ with bottom_right:
                     )
 
 
-                    # -----------------------
-                    # Notion
-                    # -----------------------
-
                     if (
                         NOTION_TOKEN
                         and
@@ -2831,47 +2644,55 @@ with bottom_right:
                     ):
 
                         notion_url = (
-                            "https://api.notion.com/"
-                            "v1/pages"
+                            "https://api.notion.com/v1/pages"
                         )
 
 
                         headers = {
 
                             "Authorization":
-                                "Bearer "
-                                + NOTION_TOKEN.strip(),
+                                f"Bearer "
+                                f"{NOTION_TOKEN.strip()}",
 
                             "Content-Type":
                                 "application/json",
 
                             "Notion-Version":
                                 "2022-06-28"
+
                         }
 
 
                         payload = {
 
                             "parent": {
+
                                 "database_id":
                                     NOTION_DATABASE_ID.strip()
+
                             },
 
                             "properties": {
 
                                 "기사제목": {
+
                                     "title": [
+
                                         {
                                             "text": {
                                                 "content":
                                                     selected_title
                                             }
                                         }
+
                                     ]
+
                                 },
 
                                 "일자": {
+
                                     "rich_text": [
+
                                         {
                                             "text": {
                                                 "content":
@@ -2880,26 +2701,34 @@ with bottom_right:
                                                     )
                                             }
                                         }
+
                                     ]
+
                                 },
 
                                 "나의 인사이트": {
+
                                     "rich_text": [
+
                                         {
                                             "text": {
                                                 "content":
                                                     scrap_insight
                                             }
                                         }
+
                                     ]
+
                                 }
+
                             }
+
                         }
 
 
                         try:
 
-                            notion_res = requests.post(
+                            notion_response = requests.post(
 
                                 notion_url,
 
@@ -2908,37 +2737,35 @@ with bottom_right:
                                 headers=headers,
 
                                 timeout=10
+
                             )
 
 
-                            if notion_res.status_code in [
-                                200,
-                                201
-                            ]:
+                            if notion_response.status_code in [200, 201]:
 
                                 st.success(
-                                    "🎯 대시보드 저장 + "
+                                    "🎯 대시보드 저장 및 "
                                     "노션 백업 성공!"
                                 )
 
                             else:
 
                                 st.warning(
-                                    "⚠️ 대시보드 저장은 성공했지만 "
-                                    "노션 전송 실패\n\n"
-                                    f"{notion_res.text[:500]}"
+                                    "⚠️ 대시보드 저장 성공 / "
+                                    f"노션 오류 "
+                                    f"{notion_response.status_code}"
                                 )
 
-                        except Exception as e:
+                        except Exception:
 
                             st.warning(
-                                f"⚠️ 노션 전송 오류: {e}"
+                                "⚠️ 노션 백업 중 오류"
                             )
 
                     else:
 
                         st.success(
-                            "🎯 대시보드 저장 완료!"
+                            "🎯 대시보드 저장 완료"
                         )
 
 
@@ -2955,19 +2782,16 @@ with bottom_right:
             else:
 
                 st.error(
-                    "⚠️ 인사이트 내용을 입력하세요."
+                    "⚠️ 인사이트를 입력해주세요."
                 )
 
-
-    # =====================================================
-    # 누적 스크랩
-    # =====================================================
 
     if st.session_state[
         "scrap_storage"
     ]:
 
         st.markdown("---")
+
 
         st.markdown(
             "📂 **나의 누적 스크랩 내역**"
@@ -2981,43 +2805,19 @@ with bottom_right:
         )
 
 
-        display_df = scrap_df.copy()
-
-
         edited_df = st.data_editor(
 
-            display_df,
-
-            column_config={
-
-                "기사링크":
-                    st.column_config.LinkColumn(
-                        "원문 링크",
-                        display_text="🔗 이동하기"
-                    ),
-
-                "일자":
-                    st.column_config.TextColumn(
-                        "일자",
-                        disabled=True
-                    ),
-
-                "기사제목":
-                    st.column_config.TextColumn(
-                        "기사제목",
-                        disabled=True
-                    )
-            },
+            scrap_df,
 
             use_container_width=True,
 
             hide_index=True
+
         )
 
 
         updated_data = (
-            edited_df
-            .to_dict(
+            edited_df.to_dict(
                 orient="records"
             )
         )
@@ -3041,7 +2841,7 @@ with bottom_right:
 
 
         if st.button(
-            "🗑️ 전체 스크랩 내역 삭제"
+            "🗑️ 전체 스크랩 내역 영구 삭제"
         ):
 
             st.session_state[
@@ -3061,11 +2861,11 @@ st.markdown("---")
 
 
 # =========================================================
-# 📰 22. 전체 기사 데이터
+# ALL ARTICLES
 # =========================================================
 
 st.subheader(
-    "📰 최근 7일간 검증 매체 기사 데이터"
+    "📰 최근 7일간 검증 매체 기사 데이터 매트릭스"
 )
 
 
@@ -3074,7 +2874,9 @@ if not filtered_raw_df.empty:
     st.data_editor(
 
         filtered_raw_df[
+
             [
+
                 "날짜",
                 "언론사",
                 "매체구분",
@@ -3082,7 +2884,9 @@ if not filtered_raw_df.empty:
                 "eval_mode",
                 "기사제목",
                 "기사링크"
+
             ]
+
         ],
 
         column_config={
@@ -3103,6 +2907,7 @@ if not filtered_raw_df.empty:
                 st.column_config.TextColumn(
                     "평가 방식"
                 )
+
         },
 
         use_container_width=True,
@@ -3110,4 +2915,5 @@ if not filtered_raw_df.empty:
         hide_index=True,
 
         disabled=True
+
     )

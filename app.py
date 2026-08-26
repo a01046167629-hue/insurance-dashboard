@@ -1,3 +1,6 @@
+아래 코드를 `app.py`의 기존 내용 전체를 지우고 그대로 붙여넣으세요.
+
+```python
 import html
 import io
 import json
@@ -14,6 +17,8 @@ import streamlit as st
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
 
@@ -23,27 +28,18 @@ st.set_page_config(
     layout="wide",
 )
 
-NAVER_CLIENT_ID = str(
-    st.secrets.get("NAVER_CLIENT_ID", os.getenv("NAVER_CLIENT_ID", ""))
-).strip()
-NAVER_CLIENT_SECRET = str(
-    st.secrets.get("NAVER_CLIENT_SECRET", os.getenv("NAVER_CLIENT_SECRET", ""))
-).strip()
-GEMINI_API_KEY = str(
-    st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", ""))
-).strip()
-NOTION_TOKEN = str(
-    st.secrets.get("NOTION_TOKEN", os.getenv("NOTION_TOKEN", ""))
-).strip()
-NOTION_DATABASE_ID = str(
-    st.secrets.get("NOTION_DATABASE_ID", os.getenv("NOTION_DATABASE_ID", ""))
-).strip()
+NAVER_CLIENT_ID = str(st.secrets.get("NAVER_CLIENT_ID", "")).strip()
+NAVER_CLIENT_SECRET = str(st.secrets.get("NAVER_CLIENT_SECRET", "")).strip()
+GEMINI_API_KEY = str(st.secrets.get("GEMINI_API_KEY", "")).strip()
 
 NAVER_URL = "https://openapi.naver.com/v1/search/news.json"
 GEMINI_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent"
+    "https://generativelanguage.googleapis.com/"
+    "v1beta/models/gemini-3.6-flash:generateContent"
 )
-SCRAP_FILE = "insurance_scraps.csv"
+
+KOREAN_FONT_PATH = r"C:\Windows\Fonts\malgun.ttf"
+KOREAN_BOLD_FONT_PATH = r"C:\Windows\Fonts\malgunbd.ttf"
 
 TARGET_PRESS_CONFIG = {
     "한국보험신문": {
@@ -99,85 +95,136 @@ TARGET_PRESS_CONFIG = {
 }
 
 
-def add_diagnostic(kind, message):
-    """API 오류를 숨기지 않고 화면에 표시하기 위한 함수"""
-    st.session_state.setdefault("api_diagnostics", [])
+def add_error(message):
+    st.session_state.setdefault("api_errors", [])
 
-    item = f"{kind}: {message}"
-    if item not in st.session_state["api_diagnostics"]:
-        st.session_state["api_diagnostics"].append(item)
+    if message not in st.session_state["api_errors"]:
+        st.session_state["api_errors"].append(message)
 
 
-def clean_html(value):
-    return html.unescape(re.sub(r"<[^>]+>", "", value or "")).strip()
+def clean_html(text):
+    return html.unescape(re.sub(r"<[^>]+>", "", text or "")).strip()
 
 
 def normalize_title(title):
-    text = re.sub(r"\[.*?\]|\(.*?\)", "", title or "")
-    return set(re.sub(r"[^\w\s]", " ", text).lower().split())
+    title = re.sub(r"\[.*?\]|\(.*?\)", "", title or "")
+    title = re.sub(r"[^\w\s]", " ", title.lower())
+
+    return set(title.split())
 
 
 def is_duplicate_article(tokens, previous_tokens):
-    for old_tokens in previous_tokens:
-        if not tokens or not old_tokens:
+    for previous in previous_tokens:
+        if not tokens or not previous:
             continue
 
-        similarity = len(tokens & old_tokens) / len(tokens | old_tokens)
+        similarity = len(tokens & previous) / len(tokens | previous)
+
         if similarity >= 0.55:
             return True
 
     return False
 
 
-def fallback_score(title, description, published_at):
-    """Gemini를 사용할 수 없을 때의 규칙 기반 보조 평가"""
+def is_insurance_industry_article(title, description):
+    """
+    보험회사·보험상품·보험산업과 직접 연관된 기사만 통과시킵니다.
+    국민건강보험 등 공적 건강보험 중심 기사는 제외합니다.
+    """
     text = f"{title} {description}".lower()
 
-    if any(keyword in text for keyword in [
+    insurance_terms = [
+        "보험사",
+        "보험회사",
+        "보험업",
+        "보험업계",
+        "생명보험",
+        "손해보험",
+        "보험상품",
+        "보험료",
+        "보험금",
+        "보험계약",
+        "보험설계사",
+        "보험대리점",
+        "ga",
+        "실손보험",
+        "자동차보험",
+        "운전자보험",
+        "암보험",
+        "펫보험",
+        "치아보험",
+        "여행자보험",
+        "보장성보험",
+        "저축성보험",
+        "변액보험",
+        "연금보험",
+        "재보험",
+        "ifrs17",
+        "csm",
+        "k-ics",
+    ]
+
+    public_health_terms = [
+        "국민건강보험공단",
+        "건강보험심사평가원",
+        "건강보험료 부과",
+        "건강보험 재정",
+        "건보료",
+        "의료보험",
+    ]
+
+    has_insurance_term = any(term in text for term in insurance_terms)
+    is_public_health_topic = any(term in text for term in public_health_terms)
+
+    return has_insurance_term and not is_public_health_topic
+
+
+@st.cache_resource
+def register_korean_pdf_font():
+    try:
+        pdfmetrics.registerFont(
+            TTFont("MalgunGothic", KOREAN_FONT_PATH)
+        )
+        pdfmetrics.registerFont(
+            TTFont("MalgunGothic-Bold", KOREAN_BOLD_FONT_PATH)
+        )
+
+        return "MalgunGothic", "MalgunGothic-Bold"
+
+    except Exception as error:
+        add_error(f"PDF 한글 폰트 등록 실패: {error}")
+
+        return "Helvetica", "Helvetica-Bold"
+
+
+def fallback_score(title, description, published_at):
+    text = f"{title} {description}".lower()
+
+    industry = 23 if any(word in text for word in [
         "ifrs17", "csm", "k-ics", "지급여력", "자본확충"
-    ]):
-        industry = 23
-    elif any(keyword in text for keyword in [
+    ]) else 18 if any(word in text for word in [
         "손해율", "언더라이팅", "수익성"
-    ]):
-        industry = 18
-    else:
-        industry = 10
+    ]) else 10
 
-    if any(keyword in text for keyword in [
-        "금감원", "금융위", "금융감독원", "시행령", "감독규정", "가이드라인"
-    ]):
-        policy = 18
-    elif any(keyword in text for keyword in [
-        "제도개편", "개선안", "공청회", "논의"
-    ]):
-        policy = 13
-    else:
-        policy = 5
+    policy = 18 if any(word in text for word in [
+        "금감원", "금융위", "금융감독원", "감독규정", "시행령"
+    ]) else 13 if any(word in text for word in [
+        "제도개편", "개선안", "공청회"
+    ]) else 5
 
-    if any(keyword in text for keyword in [
+    consumer = 18 if any(word in text for word in [
         "실손", "비급여", "보험료", "약관", "지급기준"
-    ]):
-        consumer = 18
-    elif any(keyword in text for keyword in [
+    ]) else 13 if any(word in text for word in [
         "펫보험", "유병자", "고령", "치매"
-    ]):
-        consumer = 13
-    else:
-        consumer = 5
+    ]) else 5
 
-    if any(keyword in text for keyword in [
+    market = 17 if any(word in text for word in [
         "점유율", "가격경쟁", "ga", "제3보험"
-    ]):
-        market = 17
-    elif any(keyword in text for keyword in [
+    ]) else 12 if any(word in text for word in [
         "신상품", "특약", "담보"
-    ]):
-        market = 12
-    else:
-        market = 6
+    ]) else 6
 
-    days = max(0, (datetime.now() - published_at.replace(tzinfo=None)).days)
+    days = max(0, (datetime.now() - published_at).days)
     timeliness = 14 if days <= 1 else 11 if days <= 3 else 8 if days <= 5 else 4
 
     return {
@@ -187,69 +234,71 @@ def fallback_score(title, description, published_at):
         "consumer_score": consumer,
         "market_score": market,
         "timeliness_score": timeliness,
-        "importance_reason": (
-            "규칙 기반 보조 평가입니다. "
-            "Gemini API 진단 메시지를 확인하세요."
-        ),
+        "importance_reason": "Gemini API 연결 실패 시 적용되는 규칙 기반 보조 평가입니다.",
         "eval_mode": "Fallback",
     }
 
 
-def gemini_json(prompt, timeout=45):
-    """
-    AQ. 형식 Gemini 인증 키를 지원한다.
-    핵심: URL ?key=가 아니라 x-goog-api-key 헤더로 전송한다.
-    """
+def gemini_json(prompt):
     if not GEMINI_API_KEY:
-        add_diagnostic("Gemini", "GEMINI_API_KEY가 설정되지 않았습니다.")
+        add_error("Gemini API 키가 설정되지 않았습니다.")
+
         return None
 
     payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": prompt,
+                    }
+                ]
+            }
+        ],
         "generationConfig": {
             "responseMimeType": "application/json",
             "temperature": 0.2,
         },
     }
 
-    last_error = "알 수 없는 오류"
+    try:
+        response = requests.post(
+            GEMINI_URL,
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": GEMINI_API_KEY,
+            },
+            json=payload,
+            timeout=45,
+        )
 
-    for _ in range(2):
-        try:
-            response = requests.post(
-                GEMINI_URL,
-                headers={
-                    "Content-Type": "application/json",
-                    "x-goog-api-key": GEMINI_API_KEY,
-                },
-                json=payload,
-                timeout=timeout,
-            )
-            response.raise_for_status()
+        response.raise_for_status()
 
-            data = response.json()
-            response_text = data["candidates"][0]["content"]["parts"][0]["text"]
+        data = response.json()
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
 
-            return json.loads(response_text)
+        return json.loads(text)
 
-        except requests.RequestException as error:
-            if error.response is not None:
-                last_error = error.response.text[:500]
-            else:
-                last_error = str(error)
+    except requests.RequestException as error:
+        detail = (
+            error.response.text[:500]
+            if error.response is not None
+            else str(error)
+        )
 
-        except (KeyError, IndexError, ValueError) as error:
-            last_error = f"Gemini 응답 형식 오류: {error}"
+        add_error(f"Gemini: {detail}")
 
-    add_diagnostic("Gemini", last_error)
+    except (KeyError, IndexError, ValueError) as error:
+        add_error(f"Gemini 응답 형식 오류: {error}")
+
     return None
 
 
-def evaluate_articles_batch_with_gemini(articles):
+def evaluate_articles_with_gemini(articles):
     if not articles:
         return []
 
-    article_context = "\n\n".join(
+    article_text = "\n\n".join(
         (
             f"기사 #{index}\n"
             f"제목: {article['기사제목']}\n"
@@ -262,11 +311,11 @@ def evaluate_articles_batch_with_gemini(articles):
     prompt = f"""
 당신은 대한민국 보험산업 분석가입니다.
 
-아래 보험 기사만 근거로 각 기사의 중요도를 평가하세요.
+아래 보험 기사만 근거로 중요도를 평가하세요.
 
-{article_context}
+{article_text}
 
-반드시 아래 JSON 형식만 반환하세요.
+반드시 JSON 형식만 반환하세요.
 
 {{
   "evaluations": [
@@ -281,29 +330,12 @@ def evaluate_articles_batch_with_gemini(articles):
     }}
   ]
 }}
-
-배점:
-- 산업 영향도: 0~25점
-- 정책/제도 영향도: 0~20점
-- 소비자 영향도: 0~20점
-- 시장 영향도: 0~20점
-- 시의성: 0~15점
-
-산업 21~25점은 보험산업 전반의 구조 변화,
-정책 16~20점은 직접적인 제도 변화,
-소비자 16~20점은 다수 가입자 직접 영향,
-시장 16~20점은 경쟁구도 또는 수익성의 큰 영향,
-시의성 13~15점은 현재 진행 중인 긴급 현안입니다.
 """
 
-    response_data = gemini_json(prompt)
-    evaluations = (
-        response_data.get("evaluations", [])
-        if isinstance(response_data, dict)
-        else []
-    )
+    result = gemini_json(prompt)
+    evaluations = result.get("evaluations", []) if isinstance(result, dict) else []
 
-    results = []
+    scores = []
 
     for index, article in enumerate(articles, 1):
         evaluation = next(
@@ -316,7 +348,7 @@ def evaluate_articles_batch_with_gemini(articles):
         )
 
         if not isinstance(evaluation, dict):
-            results.append(
+            scores.append(
                 fallback_score(
                     article["기사제목"],
                     article["기사내용"],
@@ -332,10 +364,8 @@ def evaluate_articles_batch_with_gemini(articles):
             market = max(0, min(20, int(evaluation.get("market_score", 0))))
             timeliness = max(0, min(15, int(evaluation.get("timeliness_score", 0))))
 
-            results.append({
-                "article_importance_score": (
-                    industry + policy + consumer + market + timeliness
-                ),
+            scores.append({
+                "article_importance_score": industry + policy + consumer + market + timeliness,
                 "industry_score": industry,
                 "policy_score": policy,
                 "consumer_score": consumer,
@@ -348,7 +378,7 @@ def evaluate_articles_batch_with_gemini(articles):
             })
 
         except (TypeError, ValueError):
-            results.append(
+            scores.append(
                 fallback_score(
                     article["기사제목"],
                     article["기사내용"],
@@ -356,54 +386,17 @@ def evaluate_articles_batch_with_gemini(articles):
                 )
             )
 
-    return results
+    return scores
 
 
-def load_demo_data():
-    now = datetime.now()
-
-    rows = [
-        (
-            "IFRS17·CSM 공시 강화…보험사 자본관리 부담 커진다",
-            "회계 기준과 지급여력 관리 관련 보도입니다.",
-            "한국보험신문",
-            "보험 전문지",
-        ),
-        (
-            "금감원, 실손보험 비급여 관리 개선안 검토",
-            "실손보험 보장과 소비자 부담 관련 정책 논의입니다.",
-            "매일경제",
-            "경제지",
-        ),
-    ]
-
-    data = []
-
-    for title, description, press, press_type in rows:
-        data.append({
-            "날짜": now.strftime("%Y-%m-%d"),
-            "언론사": press,
-            "매체구분": press_type,
-            "기사제목": title,
-            "기사내용": description,
-            "기사링크": "https://news.naver.com",
-            "pub_datetime": now,
-            **fallback_score(title, description, now),
-        })
-
-    return pd.DataFrame(data)
-
-
-@st.cache_data(ttl=timedelta(hours=2), show_spinner=False)
+@st.cache_data(ttl=timedelta(hours=2))
 def fetch_real_naver_news():
     collected_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
-        add_diagnostic(
-            "Naver",
-            "NAVER_CLIENT_ID 또는 NAVER_CLIENT_SECRET이 설정되지 않았습니다.",
-        )
-        return load_demo_data(), collected_at
+        add_error("Naver API 키가 설정되지 않았습니다.")
+
+        return pd.DataFrame(), collected_at
 
     headers = {
         "X-Naver-Client-Id": NAVER_CLIENT_ID,
@@ -411,15 +404,19 @@ def fetch_real_naver_news():
     }
 
     cutoff = datetime.now() - timedelta(days=7)
-
-    blacklist = [
-        "이벤트", "출시기념", "증정", "공식 sns",
-        "기프티콘", "사은품", "팝업", "업무협약",
-        "mou", "공모전", "보도자료",
-    ]
-
     seen_titles = []
     articles = []
+
+    blacklist = [
+        "이벤트",
+        "출시기념",
+        "증정",
+        "기프티콘",
+        "사은품",
+        "팝업",
+        "공모전",
+        "보도자료",
+    ]
 
     for press_name, config in TARGET_PRESS_CONFIG.items():
         try:
@@ -433,19 +430,22 @@ def fetch_real_naver_news():
                 },
                 timeout=15,
             )
+
             response.raise_for_status()
             items = response.json().get("items", [])
 
         except requests.RequestException as error:
-            detail = (
-                error.response.text[:300]
-                if error.response is not None
-                else str(error)
-            )
-            add_diagnostic("Naver", f"{press_name} 조회 실패: {detail}")
+            add_error(f"Naver {press_name}: {error}")
             continue
 
         for item in items:
+            title = clean_html(item.get("title", ""))
+            description = clean_html(item.get("description", ""))
+            source_url = (
+                item.get("originallink", "").strip()
+                or item.get("link", "").strip()
+            )
+
             try:
                 published_at = parsedate_to_datetime(
                     item.get("pubDate", "")
@@ -456,16 +456,8 @@ def fetch_real_naver_news():
             if published_at < cutoff:
                 continue
 
-            title = clean_html(item.get("title"))
-            description = clean_html(item.get("description"))
-
-            article_url = (
-                item.get("originallink", "").strip()
-                or item.get("link", "").strip()
-            )
-
-            host = urlparse(article_url).netloc.lower()
-            tokens = normalize_title(title)
+            host = urlparse(source_url).netloc.lower()
+            title_tokens = normalize_title(title)
 
             if not title:
                 continue
@@ -473,10 +465,13 @@ def fetch_real_naver_news():
             if not any(domain in host for domain in config["domains"]):
                 continue
 
+            if not is_insurance_industry_article(title, description):
+                continue
+
             if any(word in title.lower() for word in blacklist):
                 continue
 
-            if is_duplicate_article(tokens, seen_titles):
+            if is_duplicate_article(title_tokens, seen_titles):
                 continue
 
             articles.append({
@@ -485,289 +480,175 @@ def fetch_real_naver_news():
                 "매체구분": config["type"],
                 "기사제목": title,
                 "기사내용": description,
-                "기사링크": article_url,
+                "기사링크": source_url,
                 "pub_datetime": published_at,
             })
 
-            seen_titles.append(tokens)
+            seen_titles.append(title_tokens)
 
     if not articles:
-        add_diagnostic(
-            "Naver",
-            "최근 7일 조건을 만족하는 기사를 찾지 못해 데모 데이터를 표시합니다.",
-        )
-        return load_demo_data(), collected_at
+        add_error("보험산업 직접 관련 기사를 찾지 못했습니다.")
 
-    evaluations = evaluate_articles_batch_with_gemini(articles)
+        return pd.DataFrame(), collected_at
 
-    combined = [
-        {**article, **evaluation}
-        for article, evaluation in zip(articles, evaluations)
-    ]
+    scores = evaluate_articles_with_gemini(articles)
 
-    return pd.DataFrame(combined), collected_at
+    return pd.DataFrame(
+        [
+            {
+                **article,
+                **score,
+            }
+            for article, score in zip(articles, scores)
+        ]
+    ), collected_at
 
 
 def select_top10_articles(dataframe):
     if dataframe.empty:
         return dataframe.copy()
 
-    selected_rows = []
+    selected = []
     press_count = {}
 
-    sorted_dataframe = dataframe.sort_values(
+    for _, row in dataframe.sort_values(
         "article_importance_score",
         ascending=False,
-    )
-
-    for _, row in sorted_dataframe.iterrows():
+    ).iterrows():
         press = row["언론사"]
 
         if press_count.get(press, 0) >= 2:
             continue
 
-        selected_rows.append(row)
+        selected.append(row)
         press_count[press] = press_count.get(press, 0) + 1
 
-        if len(selected_rows) == 10:
+        if len(selected) == 10:
             break
 
-    result = pd.DataFrame(selected_rows)
+    result = pd.DataFrame(selected)
     result.insert(0, "순위", range(1, len(result) + 1))
 
     return result
 
 
-def analyze_core_issues(top10_dataframe):
-    if top10_dataframe.empty:
-        return []
+def make_pdf(top10_dataframe):
+    font_name, bold_font_name = register_korean_pdf_font()
 
-    context = "\n".join(
-        (
-            f"#{row['순위']} "
-            f"{row['기사제목']} | {row['기사내용']}"
-        )
-        for _, row in top10_dataframe.iterrows()
-    )
-
-    prompt = f"""
-다음 보험 기사만 근거로 이번 주 핵심 이슈 3~5개를 JSON으로 작성하세요.
-
-{context}
-
-반드시 다음 형식만 반환하세요.
-
-{{
-  "issues": [
-    {{
-      "core_issue": "이슈명",
-      "core_summary": "핵심 내용",
-      "why_it_matters": "중요한 이유",
-      "related_article_numbers": [1],
-      "product_action": "상품기획 행동",
-      "sales_action": "영업관리 행동"
-    }}
-  ]
-}}
-
-사실과 추론을 구분하고, 기사에 없는 수치를 만들지 마세요.
-"""
-
-    response_data = gemini_json(prompt)
-
-    if (
-        isinstance(response_data, dict)
-        and isinstance(response_data.get("issues"), list)
-    ):
-        return response_data["issues"]
-
-    return [{
-        "core_issue": "기사 중요도 기반 주간 모니터링",
-        "core_summary": (
-            "Gemini API가 연결되지 않아 규칙 기반 평가 결과를 표시하고 있습니다."
-        ),
-        "why_it_matters": (
-            "API 진단 메시지를 확인한 뒤 Gemini 연결을 완료하세요."
-        ),
-        "related_article_numbers": top10_dataframe["순위"].tolist(),
-        "product_action": "핵심 기사별 상품 영향을 검토합니다.",
-        "sales_action": "고객 문의 가능성과 판매 현장 영향을 점검합니다.",
-    }]
-
-
-def make_pdf(top10_dataframe, issues):
     buffer = io.BytesIO()
     styles = getSampleStyleSheet()
 
+    title_style = ParagraphStyle(
+        "TitleKorean",
+        parent=styles["Title"],
+        fontName=bold_font_name,
+        fontSize=18,
+    )
+
     body_style = ParagraphStyle(
-        "Body",
+        "BodyKorean",
         parent=styles["BodyText"],
-        fontName="Helvetica",
+        fontName=font_name,
         fontSize=8,
         leading=11,
     )
 
     story = [
-        Paragraph("Insurance Trend Intelligence Report", styles["Title"]),
-        Spacer(1, 10),
+        Paragraph(
+            "보험 트렌드 & 이슈 인텔리전스 리포트",
+            title_style,
+        ),
+        Spacer(1, 12),
     ]
 
-    table_data = [["Rank", "Press", "Score", "Title"]]
+    table_data = [["순위", "언론사", "점수", "기사 제목"]]
 
     for _, row in top10_dataframe.iterrows():
         table_data.append([
             str(row["순위"]),
             str(row["언론사"]),
             str(row["article_importance_score"]),
-            str(row["기사제목"])[:65],
+            str(row["기사제목"])[:70],
         ])
 
-    report_table = Table(
+    table = Table(
         table_data,
         colWidths=[35, 80, 40, 360],
     )
 
-    report_table.setStyle(TableStyle([
+    table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
         ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+        ("FONTNAME", (0, 0), (-1, -1), font_name),
+        ("FONTNAME", (0, 0), (-1, 0), bold_font_name),
         ("FONTSIZE", (0, 0), (-1, -1), 7),
     ]))
 
-    story += [
-        report_table,
-        Spacer(1, 12),
-        Paragraph("Key issues", styles["Heading2"]),
-    ]
-
-    for issue in issues:
-        story += [
-            Paragraph(
-                str(issue.get("core_issue", "Issue")),
-                styles["Heading3"],
-            ),
-            Paragraph(
-                str(issue.get("core_summary", "")),
-                body_style,
-            ),
-            Paragraph(
-                "Product: " + str(issue.get("product_action", "")),
-                body_style,
-            ),
-            Paragraph(
-                "Sales: " + str(issue.get("sales_action", "")),
-                body_style,
-            ),
-            Spacer(1, 5),
-        ]
+    story.append(table)
+    story.append(Spacer(1, 12))
+    story.append(
+        Paragraph(
+            "본 리포트는 보험산업 직접 관련 기사만 선별해 작성되었습니다.",
+            body_style,
+        )
+    )
 
     SimpleDocTemplate(buffer, pagesize=A4).build(story)
 
     return buffer.getvalue()
 
 
-def save_scrap(item):
-    dataframe = pd.DataFrame([item])
-
-    dataframe.to_csv(
-        SCRAP_FILE,
-        mode="a",
-        header=not os.path.exists(SCRAP_FILE),
-        index=False,
-        encoding="utf-8-sig",
-    )
-
-
-def send_to_notion(item):
-    if not NOTION_TOKEN or not NOTION_DATABASE_ID:
-        return False, "Notion 설정이 없어 로컬 CSV에만 저장했습니다."
-
-    payload = {
-        "parent": {"database_id": NOTION_DATABASE_ID},
-        "properties": {
-            "기사제목": {
-                "title": [{"text": {"content": item["기사제목"]}}],
-            },
-            "날짜": {
-                "rich_text": [{"text": {"content": item["날짜"]}}],
-            },
-            "인사이트": {
-                "rich_text": [{"text": {"content": item["인사이트"]}}],
-            },
-        },
-    }
-
-    try:
-        response = requests.post(
-            "https://api.notion.com/v1/pages",
-            headers={
-                "Authorization": f"Bearer {NOTION_TOKEN}",
-                "Notion-Version": "2022-06-28",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=20,
-        )
-        response.raise_for_status()
-
-        return True, "Notion 백업까지 완료했습니다."
-
-    except requests.RequestException as error:
-        detail = (
-            error.response.text[:300]
-            if error.response is not None
-            else str(error)
-        )
-        return False, f"로컬 저장은 완료했지만 Notion 전송 실패: {detail}"
-
-
 st.title("📈 AI 기반 보험 트렌드 & 이슈 인텔리전스")
-st.caption(
-    "최근 7일의 검증 매체 뉴스를 분석하여 "
-    "보험시장 핵심 이슈와 실무 인사이트를 제공합니다."
-)
+st.caption("보험회사·보험상품·보험산업 직접 관련 기사만 수집합니다.")
 
 if st.button("🔄 뉴스·AI 분석 새로고침"):
     st.cache_data.clear()
-    st.session_state["api_diagnostics"] = []
+    st.session_state["api_errors"] = []
     st.rerun()
 
-raw_df, collection_timestamp = fetch_real_naver_news()
+raw_df, collected_at = fetch_real_naver_news()
 top10_df = select_top10_articles(raw_df)
-core_issues = analyze_core_issues(top10_df)
 
-ai_count = int((raw_df["eval_mode"] == "AI").sum()) if not raw_df.empty else 0
+ai_count = (
+    int((raw_df["eval_mode"] == "AI").sum())
+    if not raw_df.empty
+    else 0
+)
+
 fallback_count = len(raw_df) - ai_count
 
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3 = st.columns(3)
 
-col1.metric("검증 수집 기사 수", f"{len(raw_df)}건")
+col1.metric("보험 관련 수집 기사", f"{len(raw_df)}건")
 col2.metric("AI vs Fallback", f"AI {ai_count}건 / FB {fallback_count}건")
-col3.metric("TOP 10 기사", f"{len(top10_df)}건")
-col4.metric("도출 핵심 이슈", f"{len(core_issues)}개")
+col3.metric("보험 뉴스 TOP 10", f"{len(top10_df)}건")
 
-if st.session_state.get("api_diagnostics"):
-    with st.expander("⚠️ API 진단 메시지", expanded=ai_count == 0):
-        for message in st.session_state["api_diagnostics"]:
-            st.error(message)
+if st.session_state.get("api_errors"):
+    with st.expander("⚠️ API 진단 메시지"):
+        for error in st.session_state["api_errors"]:
+            st.error(error)
 
-st.subheader("이번 주 중요도 TOP 10")
+st.subheader("이번 주 보험산업 중요도 TOP 10")
 
-if not top10_df.empty:
-    figure = px.bar(
+if top10_df.empty:
+    st.info("조건에 맞는 보험 기사가 없습니다. 새로고침해 주세요.")
+
+else:
+    chart = px.bar(
         top10_df,
         x="순위",
         y="article_importance_score",
         color="매체구분",
+        text="article_importance_score",
         hover_data=[
             "언론사",
             "기사제목",
-            "eval_mode",
             "importance_reason",
+            "eval_mode",
         ],
-        text="article_importance_score",
     )
 
-    st.plotly_chart(figure, use_container_width=True)
+    st.plotly_chart(chart, use_container_width=True)
 
     st.dataframe(
         top10_df[
@@ -784,63 +665,23 @@ if not top10_df.empty:
         use_container_width=True,
         hide_index=True,
         column_config={
-            "기사링크": st.column_config.LinkColumn("원문"),
+            "기사링크": st.column_config.LinkColumn("기사 원문"),
         },
     )
 
     st.download_button(
-        "📄 PDF 리포트 다운로드",
-        make_pdf(top10_df, core_issues),
-        file_name=f"보험_인사이트_{datetime.now():%Y%m%d}.pdf",
+        label="📄 보험 뉴스 PDF 리포트 다운로드",
+        data=make_pdf(top10_df),
+        file_name=f"보험_뉴스_리포트_{datetime.now():%Y%m%d}.pdf",
         mime="application/pdf",
     )
 
-st.subheader("AI 종합 분석: 핵심 이슈와 실무 인사이트")
-
-for issue in core_issues:
-    with st.expander(f"🧩 {issue.get('core_issue', '핵심 이슈')}"):
-        st.write(issue.get("core_summary", ""))
-        st.caption("중요한 이유: " + str(issue.get("why_it_matters", "")))
-        st.info("상품기획 Action: " + str(issue.get("product_action", "")))
-        st.success("영업관리 Action: " + str(issue.get("sales_action", "")))
-
-st.subheader("기사 스크랩 및 인사이트")
+st.subheader("전체 보험 관련 수집 기사")
 
 if not raw_df.empty:
-    selected_title = st.selectbox(
-        "기사 선택",
-        raw_df["기사제목"].tolist(),
-    )
-
-    insight = st.text_area("나의 상품기획 / 영업관리 인사이트")
-
-    if st.button("💾 로컬 저장 및 Notion 백업"):
-        if not insight.strip():
-            st.warning("인사이트를 입력하세요.")
-
-        else:
-            selected_row = raw_df.loc[
-                raw_df["기사제목"] == selected_title
-            ].iloc[0]
-
-            scrap = {
-                "날짜": datetime.now().strftime("%Y-%m-%d"),
-                "기사제목": selected_title,
-                "기사링크": selected_row["기사링크"],
-                "인사이트": insight.strip(),
-            }
-
-            save_scrap(scrap)
-            success, message = send_to_notion(scrap)
-
-            if success:
-                st.success(message)
-            else:
-                st.warning(message)
-
-with st.expander("전체 수집 기사"):
     st.dataframe(
         raw_df.drop(columns=["pub_datetime"], errors="ignore"),
         use_container_width=True,
         hide_index=True,
     )
+```
